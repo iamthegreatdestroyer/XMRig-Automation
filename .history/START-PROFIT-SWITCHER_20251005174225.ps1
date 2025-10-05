@@ -49,8 +49,7 @@ if (-not $xmrigProcess) {
         Write-Host "  [OK] XMRig started!" -ForegroundColor Green
         Write-Host "  Waiting 10 seconds for XMRig to initialize..." -ForegroundColor Cyan
         Start-Sleep -Seconds 10
-    }
-    else {
+    } else {
         Write-Host "  [X] ERROR: XMRig not found at C:\XMRig\xmrig-6.22.0\xmrig.exe" -ForegroundColor Red
         Write-Host ""
         Write-Host "  Press any key to exit..."

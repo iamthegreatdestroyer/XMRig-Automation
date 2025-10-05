@@ -1,10 +1,10 @@
 # ==================================================    } else {
-Write-Host "  [X] ERROR: XMRig not found at C:\XMRig\xmrig.exe" -ForegroundColor Red
-Write-Host ""
-Write-Host "  Press any key to exit..."
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-exit 1
-}
+        Write-Host "  [X] ERROR: XMRig not found at C:\XMRig\xmrig.exe" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  Press any key to exit..."
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        exit 1
+    }
 }
 
 Write-Host "  [OK] Running as Administrator" -ForegroundColor Green

@@ -1,10 +1,10 @@
 # ==================================================    } else {
-Write-Host "  [X] ERROR: XMRig not found at C:\XMRig\xmrig.exe" -ForegroundColor Red
-Write-Host ""
-Write-Host "  Press any key to exit..."
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-exit 1
-}
+        Write-Host "  [X] ERROR: XMRig not found at C:\XMRig\xmrig.exe" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  Press any key to exit..."
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        exit 1
+    }
 }
 
 Write-Host "  [OK] Running as Administrator" -ForegroundColor Green
@@ -59,8 +59,9 @@ if (-not $xmrigProcess) {
         Write-Host "  [OK] XMRig started!" -ForegroundColor Green
         Write-Host "  Waiting 10 seconds for XMRig to initialize..." -ForegroundColor Cyan
         Start-Sleep -Seconds 10
-    } else {
-        Write-Host "  [X] ERROR: XMRig not found at C:\XMRig\xmrig-6.22.0\xmrig.exe" -ForegroundColor Red
+    }
+    else {
+        Write-Host "  ❌ ERROR: XMRig not found at C:\XMRig\xmrig.exe" -ForegroundColor Red
         Write-Host ""
         Write-Host "  Press any key to exit..."
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
@@ -68,8 +69,8 @@ if (-not $xmrigProcess) {
     }
 }
 
-Write-Host "  [OK] Running as Administrator" -ForegroundColor Green
-Write-Host "  [OK] XMRig is running (PID: $($xmrigProcess.Id))" -ForegroundColor Green
+Write-Host "  ✅ Running as Administrator" -ForegroundColor Green
+Write-Host "  ✅ XMRig is running (PID: $($xmrigProcess.Id))" -ForegroundColor Green
 Write-Host ""
 
 # Check if optimizer exists
