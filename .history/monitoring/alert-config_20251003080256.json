@@ -1,0 +1,32 @@
+{
+    "thresholds": {
+        "minHashrate": 1500,
+        "maxTemperature": 85,
+        "maxRejectedSharePercent": 5,
+        "maxConsecutiveErrors": 10
+    },
+    "alerts": {
+        "enabled": true,
+        "methods": {
+            "windowsNotification": true,
+            "email": false,
+            "log": true
+        },
+        "email": {
+            "smtpServer": "smtp.gmail.com",
+            "smtpPort": 587,
+            "from": "your-email@gmail.com",
+            "to": "your-email@gmail.com",
+            "username": "your-email@gmail.com",
+            "password": ""
+        }
+    },
+    "monitoring": {
+        "checkIntervalMinutes": 5,
+        "historyRetentionDays": 30
+    },
+    "notifications": {
+        "cooldownMinutes": 30,
+        "muteHours": []
+    }
+}
