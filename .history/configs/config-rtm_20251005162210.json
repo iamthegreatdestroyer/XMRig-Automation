@@ -1,0 +1,112 @@
+{
+  "api": {
+    "id": null,
+    "worker-id": null
+  },
+  "http": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 0,
+    "access-token": null,
+    "restricted": true
+  },
+  "autosave": true,
+  "background": false,
+  "colors": true,
+  "title": true,
+  "cpu": {
+    "enabled": true,
+    "huge-pages": true,
+    "huge-pages-jit": false,
+    "hw-aes": null,
+    "priority": null,
+    "memory-pool": false,
+    "yield": true,
+    "max-threads-hint": 75,
+    "asm": true,
+    "argon2-impl": null,
+    "astrobwt": null,
+    "cn/0": false,
+    "cn-lite/0": false,
+    "rx": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+  },
+  "opencl": {
+    "enabled": false,
+    "cache": true,
+    "loader": null,
+    "platform": "AMD",
+    "adl": true,
+    "cn/0": false,
+    "cn-lite/0": false
+  },
+  "cuda": {
+    "enabled": false,
+    "loader": null,
+    "nvml": true,
+    "cn/0": false,
+    "cn-lite/0": false
+  },
+  "donate-level": 1,
+  "donate-over-proxy": 1,
+  "log-file": "logs/rtm-log.txt",
+  "pools": [
+    {
+      "algo": "gr",
+      "coin": "raptoreum",
+      "url": "rtm.suprnova.cc:6273",
+      "user": "YOUR_RTM_WALLET.RyzenRig",
+      "pass": "x",
+      "rig-id": "RyzenRig-RTM",
+      "nicehash": false,
+      "keepalive": true,
+      "enabled": true,
+      "tls": false,
+      "tls-fingerprint": null,
+      "daemon": false,
+      "socks5": null,
+      "self-select": null,
+      "submit-to-origin": false
+    },
+    {
+      "algo": "gr",
+      "coin": "raptoreum",
+      "url": "raptoreum.na.mine.zergpool.com:3008",
+      "user": "YOUR_RTM_WALLET",
+      "pass": "c=RTM,mc=RTM",
+      "rig-id": "RyzenRig-RTM-Backup",
+      "nicehash": false,
+      "keepalive": true,
+      "enabled": true,
+      "tls": false,
+      "tls-fingerprint": null,
+      "daemon": false,
+      "socks5": null,
+      "self-select": null,
+      "submit-to-origin": false
+    }
+  ],
+  "retries": 5,
+  "retry-pause": 5,
+  "print-time": 60,
+  "health-print-time": 60,
+  "dmi": true,
+  "syslog": false,
+  "tls": {
+    "enabled": false,
+    "protocols": null,
+    "cert": null,
+    "cert_key": null,
+    "ciphers": null,
+    "ciphersuites": null,
+    "dhparam": null
+  },
+  "dns": {
+    "ipv6": false,
+    "ttl": 30
+  },
+  "user-agent": null,
+  "verbose": 0,
+  "watch": true,
+  "pause-on-battery": false,
+  "pause-on-active": false
+}
