@@ -80,31 +80,6 @@ $PerformanceData = @{}
 # UTILITY FUNCTIONS
 # ============================================================================
 
-function Update-StatusFile {
-    param(
-        [string]$CurrentCoin,
-        [double]$CurrentProfit,
-        [string]$Status = "ACTIVE"
-    )
-    
-    $statusData = @{
-        Status = $Status
-        CurrentCoin = $CurrentCoin
-        CurrentCoinName = $CoinAPIs[$CurrentCoin].Name
-        CurrentProfit = [math]::Round($CurrentProfit, 2)
-        LastCheck = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-        NextCheck = (Get-Date).AddMinutes($CheckIntervalMinutes).ToString('yyyy-MM-dd HH:mm:ss')
-        CheckInterval = $CheckIntervalMinutes
-        SwitchThreshold = $SwitchThresholdPercent
-    }
-    
-    try {
-        $statusData | ConvertTo-Json | Set-Content -Path $StatusFile -Force
-    } catch {
-        # Silently fail - status file is not critical
-    }
-}
-
 function Write-Log {
     param(
         [string]$Message,
@@ -348,11 +323,6 @@ function Get-ProfitabilityReport {
     Write-Log "`n  Current Mining: $($CoinAPIs[$CurrentCoin].Name) ($CurrentCoin)" "INFO"
     Write-Log "  Most Profitable: $($CoinAPIs[$bestCoin].Name) ($bestCoin) - `$$($bestProfit.ToString('F2'))/day`n" "SUCCESS"
     Write-Log "════════════════════════════════════════════════════════════`n" "INFO"
-    
-    # Update status file for dashboard
-    if ($profits.ContainsKey($CurrentCoin)) {
-        Update-StatusFile -CurrentCoin $CurrentCoin -CurrentProfit $profits[$CurrentCoin].DailyProfit -Status "ACTIVE"
-    }
     
     return @{
         Profits    = $profits

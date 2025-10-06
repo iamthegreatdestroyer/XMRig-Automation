@@ -349,11 +349,6 @@ function Get-ProfitabilityReport {
     Write-Log "  Most Profitable: $($CoinAPIs[$bestCoin].Name) ($bestCoin) - `$$($bestProfit.ToString('F2'))/day`n" "SUCCESS"
     Write-Log "════════════════════════════════════════════════════════════`n" "INFO"
     
-    # Update status file for dashboard
-    if ($profits.ContainsKey($CurrentCoin)) {
-        Update-StatusFile -CurrentCoin $CurrentCoin -CurrentProfit $profits[$CurrentCoin].DailyProfit -Status "ACTIVE"
-    }
-    
     return @{
         Profits    = $profits
         BestCoin   = $bestCoin

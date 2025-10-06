@@ -30,7 +30,6 @@ param(
 
 $ErrorActionPreference = "Continue"
 $LogFile = "$XMRigPath\logs\profit-switcher.log"
-$StatusFile = "$XMRigPath\logs\profit-switcher-status.json"
 
 # ============================================================================
 # CONFIGURATION
@@ -79,31 +78,6 @@ $PerformanceData = @{}
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
-
-function Update-StatusFile {
-    param(
-        [string]$CurrentCoin,
-        [double]$CurrentProfit,
-        [string]$Status = "ACTIVE"
-    )
-    
-    $statusData = @{
-        Status = $Status
-        CurrentCoin = $CurrentCoin
-        CurrentCoinName = $CoinAPIs[$CurrentCoin].Name
-        CurrentProfit = [math]::Round($CurrentProfit, 2)
-        LastCheck = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-        NextCheck = (Get-Date).AddMinutes($CheckIntervalMinutes).ToString('yyyy-MM-dd HH:mm:ss')
-        CheckInterval = $CheckIntervalMinutes
-        SwitchThreshold = $SwitchThresholdPercent
-    }
-    
-    try {
-        $statusData | ConvertTo-Json | Set-Content -Path $StatusFile -Force
-    } catch {
-        # Silently fail - status file is not critical
-    }
-}
 
 function Write-Log {
     param(
@@ -233,8 +207,7 @@ function Start-Mining {
     
     $coinData = $CoinAPIs[$CoinSymbol]
     $configSource = Join-Path $ConfigPath $coinData.ConfigFile
-    $configDest1 = Join-Path $XMRigPath "config.json"
-    $configDest2 = Join-Path $XMRigPath "xmrig-6.22.0\config.json"
+    $configDest = Join-Path $XMRigPath "config.json"
     
     if (-not (Test-Path $configSource)) {
         Write-Log "Config file not found: $configSource" "ERROR"
@@ -242,13 +215,12 @@ function Start-Mining {
     }
     
     try {
-        # Copy configuration to both locations (for compatibility)
-        Copy-Item -Path $configSource -Destination $configDest1 -Force -ErrorAction Stop
-        Copy-Item -Path $configSource -Destination $configDest2 -Force -ErrorAction Stop
+        # Copy configuration
+        Copy-Item -Path $configSource -Destination $configDest -Force -ErrorAction Stop
         Write-Log "Loaded $($coinData.Name) configuration" "SUCCESS"
         
         # Start XMRig
-        $xmrigExe = Join-Path $XMRigPath "xmrig-6.22.0\xmrig.exe"
+        $xmrigExe = Join-Path $XMRigPath "xmrig.exe"
         if (-not (Test-Path $xmrigExe)) {
             Write-Log "XMRig executable not found: $xmrigExe" "ERROR"
             return $false
@@ -327,12 +299,13 @@ function Get-ProfitabilityReport {
             $profitData = Calculate-DailyProfit -CoinSymbol $coin -Price $price
             $profits[$coin] = $profitData
             
-            # Format the log line with proper values
-            $coinName = $profitData.Name.PadRight(10)
-            $priceStr = ('$' + $profitData.Price.ToString('F4')).PadLeft(9)
-            $rewardStr = $profitData.DailyReward.ToString('F3').PadLeft(6)
-            $profitStr = ('$' + $profitData.DailyProfit.ToString('F2')).PadLeft(9)
-            $logLine = "  $coinName | $priceStr | $rewardStr $coin/day | $profitStr/day | $($profitData.Algorithm)"
+            $logLine = "  {0,-10} | $({1,-8:F4}) | {2,6} {3}/day | $({4,-8:F2})/day | {5}" -f `
+                $profitData.Name, `
+                $profitData.Price, `
+                $profitData.DailyReward, `
+                $coin, `
+                $profitData.DailyProfit, `
+                $profitData.Algorithm
             Write-Log $logLine "INFO"
             
             if ($profitData.DailyProfit -gt $bestProfit) {
@@ -348,11 +321,6 @@ function Get-ProfitabilityReport {
     Write-Log "`n  Current Mining: $($CoinAPIs[$CurrentCoin].Name) ($CurrentCoin)" "INFO"
     Write-Log "  Most Profitable: $($CoinAPIs[$bestCoin].Name) ($bestCoin) - `$$($bestProfit.ToString('F2'))/day`n" "SUCCESS"
     Write-Log "════════════════════════════════════════════════════════════`n" "INFO"
-    
-    # Update status file for dashboard
-    if ($profits.ContainsKey($CurrentCoin)) {
-        Update-StatusFile -CurrentCoin $CurrentCoin -CurrentProfit $profits[$CurrentCoin].DailyProfit -Status "ACTIVE"
-    }
     
     return @{
         Profits    = $profits
