@@ -67,8 +67,8 @@ $CoinAPIs = @{
         ExpectedHashrate = 10000 # H/s
         DailyReward      = 0.8        # VRSC per day
         ConfigFile       = "config-vrsc.json"
-        Pool             = "pool.verus.io:9998"
-        PoolBackup       = "ap.luckpool.net:3956"
+        Pool             = "na.luckpool.net:3956"
+        PoolBackup       = "verus.na.mine.zergpool.com:3300"
     }
 }
 
