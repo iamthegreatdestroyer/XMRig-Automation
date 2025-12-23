@@ -1,13 +1,13 @@
 {
   "api": {
-    "id": null,
-    "worker-id": null
+    "id": "xmrig-automation",
+    "worker-id": "RyzenRig"
   },
   "http": {
-    "enabled": false,
+    "enabled": true,
     "host": "127.0.0.1",
-    "port": 0,
-    "access-token": null,
+    "port": 8080,
+    "access-token": "xmrig-secure-token-2025",
     "restricted": true
   },
   "autosave": true,
@@ -62,14 +62,14 @@
     {
       "algo": "rx/0",
       "coin": "monero",
-      "url": "pool.hashvault.pro:3333",
+      "url": "stratum+ssl://pool.hashvault.pro:443",
       "user": "4AnomEjZGwm9AXDNRGX2BxLPMh1MmroAd9nXUPBHFk418XoR5WLGsDpP43Fgip8aNj7d7me6ddjYQSbVpNrhycu4HyvWVSx",
       "pass": "RyzenRig",
       "rig-id": "RyzenRig",
       "nicehash": false,
       "keepalive": true,
       "enabled": true,
-      "tls": false,
+      "tls": true,
       "tls-fingerprint": null,
       "daemon": false,
       "socks5": null,

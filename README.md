@@ -27,9 +27,11 @@
 
 ### 📊 Monitoring & Control
 
-- **Real-time status dashboard** - ASCII art interface with live stats
-- **Performance monitor** - Hashrate graphs, temperature tracking, alerts
-- **Desktop shortcuts** - Easy start/stop/status checking
+- **🖥️ Desktop GUI Dashboard** - Native Windows application with real-time mining data
+- **Live hashrate tracking** - 10s/60s/15m averages from actual XMRig logs
+- **System monitoring** - CPU usage, temperature, memory with visual progress bars
+- **Earnings calculator** - Real-time projections based on current hashrate
+- **Auto-refresh** - Updates every 2 seconds without manual intervention
 - **Pool dashboard integration** - Direct links to check earnings
 
 ### 🛠️ Lifecycle Management
@@ -67,6 +69,19 @@ After setup completes, restart to enable huge pages for optimal performance.
 
 **That's it!** Mining starts automatically on every boot.
 
+### 🖥️ Launch Desktop Dashboard (Optional)
+
+Monitor your mining in real-time with the native desktop GUI:
+
+```powershell
+cd C:\Users\YOUR_USERNAME\XMRig-Automation
+.\START-DASHBOARD.ps1
+```
+
+**First time?** The script will automatically install Python dependencies (PyQt6, psutil).
+
+See [`dashboard/README-DASHBOARD.md`](dashboard/README-DASHBOARD.md) for complete documentation.
+
 ---
 
 ## 📋 System Requirements
@@ -100,6 +115,7 @@ After setup completes, restart to enable huge pages for optimal performance.
 XMRig-Automation/
 ├── MASTER-SETUP.ps1                 # Main orchestration script
 ├── ENABLE-HUGEPAGES.ps1             # Huge pages enabler
+├── START-DASHBOARD.ps1              # 🆕 Desktop dashboard launcher
 ├── .gitignore                       # Git ignore rules
 │
 ├── config/                          # Configuration files
@@ -119,6 +135,12 @@ XMRig-Automation/
 │   ├── view-logs.bat                # Real-time log viewer
 │   ├── check-status.ps1             # Status dashboard
 │   └── monitor-performance.ps1      # Performance monitor
+│
+├── dashboard/                       # 🆕 Desktop GUI Dashboard
+│   ├── mining-dashboard.py          # PyQt6 desktop application
+│   ├── requirements.txt             # Python dependencies
+│   ├── README-DASHBOARD.md          # Complete dashboard docs
+│   └── QUICK-REFERENCE.md           # Quick reference card
 │
 ├── tools/                           # Utility tools
 │   ├── update-xmrig.ps1             # Automated updater

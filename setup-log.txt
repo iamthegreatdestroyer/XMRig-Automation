@@ -1,0 +1,8 @@
+[2025-10-07 20:30:08] [INFO] ===== XMRig Master Setup Started =====
+[2025-10-07 20:30:10] [SUCCESS] Windows version: Microsoft Windows 11 Pro (Build 26100)
+[2025-10-07 20:30:10] [SUCCESS] Running with administrator privileges
+[2025-10-07 20:30:10] [SUCCESS] .NET Framework 4.6.2 or later installed
+[2025-10-07 20:30:10] [SUCCESS] Internet connection available
+[2025-10-07 20:30:10] [SUCCESS] Free disk space: 177.33 GB
+[2025-10-07 20:30:11] [SUCCESS] CPU: AMD Ryzen 7 7730U with Radeon Graphics         
+[2025-10-07 20:30:11] [INFO] Cores: 8 | Threads: 16
