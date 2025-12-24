@@ -1,0 +1,7 @@
+{
+  "state": "cooldown",
+  "state_entry_time": 1766535710.0545707,
+  "transition_count": 10,
+  "last_transition": "throttle -> cooldown",
+  "saved_at": "2025-12-23T19:21:50.054898"
+}
