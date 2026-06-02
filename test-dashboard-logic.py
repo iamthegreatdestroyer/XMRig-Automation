@@ -2,6 +2,10 @@
 # Test dashboard data collection without GUI
 import sys
 import os
+import io
+
+# Ensure stdout can handle Unicode on Windows CP1252 consoles
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 import re
 from datetime import datetime
 import psutil
@@ -154,7 +158,7 @@ print()
 print("[5/5] Testing dashboard module import...")
 try:
     # This will test if the syntax is correct
-    with open(r'C:\Users\sgbil\XMRig-Automation\dashboard\mining-dashboard.py', 'r') as f:
+    with open(r'C:\Users\sgbil\XMRig-Automation\dashboard\mining-dashboard.py', 'r', encoding='utf-8', errors='ignore') as f:
         code = f.read()
     
     # Check for syntax errors
