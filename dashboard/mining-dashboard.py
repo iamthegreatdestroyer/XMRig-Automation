@@ -17,8 +17,11 @@ import sys
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.request import urlopen
+from urllib.error import URLError
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QGroupBox, QGridLayout, QPushButton, QTextEdit, QProgressBar
@@ -48,8 +51,9 @@ class Config:
     UPDATE_INTERVAL = 2000  # 2 seconds
     LOG_LINES = 100
     
-    # Prices (will be read from profit switcher status if available)
-    XMR_PRICE = 322.66  # Default, will update from status file
+    # Prices (live-fetched from CoinGecko with 5-minute cache)
+    XMR_PRICE = 322.66  # Default, updated by live price fetcher
+    PRICE_CACHE_TTL = 300  # seconds
 
 # ============================================================================
 # DATA READER THREAD
@@ -58,7 +62,10 @@ class Config:
 class DataReaderThread(QThread):
     """Background thread to read mining data without blocking UI"""
     data_updated = pyqtSignal(dict)
-    
+
+    _price_cache: float = Config.XMR_PRICE
+    _price_cache_time: float = 0.0
+
     def run(self):
         while True:
             try:
@@ -66,121 +73,140 @@ class DataReaderThread(QThread):
                 self.data_updated.emit(data)
             except Exception as e:
                 print(f"Error collecting data: {e}")
-            
             self.msleep(Config.UPDATE_INTERVAL)
-    
+
     def collect_mining_data(self):
-        """Collect all mining data from files and system"""
         data = {
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'xmrig': self.get_xmrig_data(),
             'system': self.get_system_data(),
             'profit_switcher': self.get_profit_switcher_data(),
         }
-        
-        # Calculate earnings (always calculate to ensure keys exist)
         data['earnings'] = self.calculate_earnings(
             data['xmrig']['hashrate'],
             data['profit_switcher'].get('currentCoin', 'XMR')
         )
-        
         return data
-    
+
+    def _fetch_live_xmr_price(self) -> float:
+        """Fetch XMR/USD from CoinGecko with 5-minute cache."""
+        now = time.time()
+        if now - DataReaderThread._price_cache_time < Config.PRICE_CACHE_TTL:
+            return DataReaderThread._price_cache
+        try:
+            url = "https://api.coingecko.com/api/v3/simple/price?ids=monero&vs_currencies=usd"
+            with urlopen(url, timeout=5) as resp:
+                data = json.loads(resp.read())
+                price = float(data['monero']['usd'])
+                DataReaderThread._price_cache = price
+                DataReaderThread._price_cache_time = now
+                return price
+        except Exception:
+            return DataReaderThread._price_cache
+
+    def _get_xmrig_data_from_api(self) -> dict | None:
+        """Try to pull data from XMRig HTTP API. Returns None if unavailable."""
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from xmrig_api_client import get_client, XMRigAPIError
+            client = get_client()
+            summary = client.get_summary(use_cache=False)
+            uptime_secs = summary.uptime
+            hours = uptime_secs // 3600
+            minutes = (uptime_secs % 3600) // 60
+            return {
+                'running': True,
+                'hashrate': summary.hashrate_60s,
+                'hashrate_10s': summary.hashrate_10s,
+                'hashrate_60s': summary.hashrate_60s,
+                'hashrate_15m': summary.hashrate_15m,
+                'accepted': summary.shares_accepted,
+                'rejected': summary.shares_rejected,
+                'pool': summary.pool_url,
+                'uptime': f"{hours}h {minutes}m",
+                'algorithm': summary.algorithm,
+                'difficulty': summary.difficulty,
+                'last_share': 'N/A',
+                'source': 'api',
+            }
+        except Exception:
+            return None
+
     def get_xmrig_data(self):
-        """Parse XMRig log file for mining stats"""
+        """HTTP API first, log-file fallback."""
+        api_data = self._get_xmrig_data_from_api()
+        if api_data:
+            return api_data
+
+        # Fallback: legacy log-file parsing
         xmrig_data = {
-            'running': False,
-            'hashrate': 0.0,
-            'hashrate_10s': 0.0,
-            'hashrate_60s': 0.0,
-            'hashrate_15m': 0.0,
-            'accepted': 0,
-            'rejected': 0,
-            'pool': 'N/A',
-            'uptime': '0h 0m',
-            'algorithm': 'N/A',
-            'difficulty': 0,
-            'last_share': 'N/A'
+            'running': False, 'hashrate': 0.0, 'hashrate_10s': 0.0,
+            'hashrate_60s': 0.0, 'hashrate_15m': 0.0, 'accepted': 0,
+            'rejected': 0, 'pool': 'N/A', 'uptime': '0h 0m',
+            'algorithm': 'N/A', 'difficulty': 0, 'last_share': 'N/A',
+            'source': 'log',
         }
-        
-        # Check if XMRig process is running
         for proc in psutil.process_iter(['name']):
             if proc.info['name'] == 'xmrig.exe':
                 xmrig_data['running'] = True
                 try:
                     process = psutil.Process(proc.pid)
-                    create_time = datetime.fromtimestamp(process.create_time())
-                    uptime = datetime.now() - create_time
-                    hours = int(uptime.total_seconds() // 3600)
-                    minutes = int((uptime.total_seconds() % 3600) // 60)
-                    xmrig_data['uptime'] = f"{hours}h {minutes}m"
-                except:
+                    uptime = datetime.now() - datetime.fromtimestamp(process.create_time())
+                    h = int(uptime.total_seconds() // 3600)
+                    m = int((uptime.total_seconds() % 3600) // 60)
+                    xmrig_data['uptime'] = f"{h}h {m}m"
+                except Exception:
                     pass
                 break
-        
+
         if not xmrig_data['running']:
             return xmrig_data
-        
-        # Find the best (most recent) log file
+
         log_file = None
         best_mtime = 0
-        
         for log_path in [Config.XMRIG_LOG] + Config.XMRIG_LOG_FALLBACKS:
             if os.path.exists(log_path):
                 mtime = os.path.getmtime(log_path)
                 if mtime > best_mtime:
                     best_mtime = mtime
                     log_file = log_path
-        
+
         if not log_file:
             return xmrig_data
-        
-        # Parse log file
+
         try:
             with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()[-Config.LOG_LINES:]
-            
             for line in reversed(lines):
-                # Parse hashrate: speed 10s/60s/15m 1899.5 1901.2 1905.0 H/s
                 if 'speed' in line and 'H/s' in line:
-                    match = re.search(r'speed.*?(\d+\.?\d*)\s+(\d+\.?\d*)\s+(\d+\.?\d*)\s+H/s', line)
-                    if match:
-                        xmrig_data['hashrate_10s'] = float(match.group(1))
-                        xmrig_data['hashrate_60s'] = float(match.group(2))
-                        xmrig_data['hashrate_15m'] = float(match.group(3)) if match.group(3) != 'n/a' else 0.0
+                    m = re.search(r'speed.*?(\d+\.?\d*)\s+(\d+\.?\d*)\s+(\d+\.?\d*)\s+H/s', line)
+                    if m:
+                        xmrig_data['hashrate_10s'] = float(m.group(1))
+                        xmrig_data['hashrate_60s'] = float(m.group(2))
+                        xmrig_data['hashrate_15m'] = float(m.group(3)) if m.group(3) != 'n/a' else 0.0
                         xmrig_data['hashrate'] = xmrig_data['hashrate_60s']
-                
-                # Parse accepted shares: accepted (120/0) diff 50000
                 if 'accepted' in line:
-                    match = re.search(r'accepted \((\d+)/(\d+)\)', line)
-                    if match:
-                        xmrig_data['accepted'] = int(match.group(1))
-                        xmrig_data['rejected'] = int(match.group(2))
-                    
-                    match = re.search(r'diff (\d+)', line)
-                    if match:
-                        xmrig_data['difficulty'] = int(match.group(1))
-                    
-                    # Get timestamp
-                    time_match = re.search(r'\[([\d-]+ [\d:\.]+)\]', line)
-                    if time_match:
-                        xmrig_data['last_share'] = time_match.group(1).split('.')[0]
-                
-                # Parse pool info: new job from pool.hashvault.pro:3333
+                    m = re.search(r'accepted \((\d+)/(\d+)\)', line)
+                    if m:
+                        xmrig_data['accepted'] = int(m.group(1))
+                        xmrig_data['rejected'] = int(m.group(2))
+                    m2 = re.search(r'diff (\d+)', line)
+                    if m2:
+                        xmrig_data['difficulty'] = int(m2.group(1))
+                    tm = re.search(r'\[([\d-]+ [\d:\.]+)\]', line)
+                    if tm:
+                        xmrig_data['last_share'] = tm.group(1).split('.')[0]
                 if 'new job from' in line:
-                    match = re.search(r'from ([^\s]+)', line)
-                    if match:
-                        xmrig_data['pool'] = match.group(1)
-                    
-                    # Get algorithm
+                    m = re.search(r'from ([^\s]+)', line)
+                    if m:
+                        xmrig_data['pool'] = m.group(1)
                     if 'algo' in line:
-                        algo_match = re.search(r'algo (\S+)', line)
-                        if algo_match:
-                            xmrig_data['algorithm'] = algo_match.group(1)
-        
+                        am = re.search(r'algo (\S+)', line)
+                        if am:
+                            xmrig_data['algorithm'] = am.group(1)
         except Exception as e:
             print(f"Error parsing XMRig log: {e}")
-        
+
         return xmrig_data
     
     def get_system_data(self):
@@ -243,33 +269,35 @@ class DataReaderThread(QThread):
         return switcher_data
     
     def calculate_earnings(self, hashrate, coin='XMR'):
-        """Calculate earnings based on hashrate"""
+        """Calculate earnings based on hashrate with live coin price."""
         earnings = {
-            'hourly_xmr': 0.0,
-            'daily_xmr': 0.0,
-            'weekly_xmr': 0.0,
-            'monthly_xmr': 0.0,
-            'daily_usd': 0.0,
-            'weekly_usd': 0.0,
-            'monthly_usd': 0.0
+            'hourly_xmr': 0.0, 'daily_xmr': 0.0,
+            'weekly_xmr': 0.0, 'monthly_xmr': 0.0,
+            'daily_usd': 0.0, 'weekly_usd': 0.0, 'monthly_usd': 0.0,
+            'xmr_price': Config.XMR_PRICE,
         }
-        
         if hashrate <= 0:
             return earnings
-        
-        # XMR calculation (based on ~1900 H/s = 0.002 XMR/day)
-        xmr_per_hash_per_day = 0.002 / 1900
-        
-        earnings['hourly_xmr'] = (hashrate * xmr_per_hash_per_day) / 24
-        earnings['daily_xmr'] = hashrate * xmr_per_hash_per_day
-        earnings['weekly_xmr'] = earnings['daily_xmr'] * 7
+
+        # Fetch live price (cached 5 min)
+        live_price = self._fetch_live_xmr_price()
+        Config.XMR_PRICE = live_price
+        earnings['xmr_price'] = live_price
+
+        # Physics formula: your_hash / network_hash * block_reward * blocks_per_day
+        # XMR network: ~3.2 GH/s, 0.6 XMR block reward, 720 blocks/day (2-min blocks)
+        network_hs = 3.2e9
+        xmr_per_hash_per_day = (0.6 * 720) / network_hs
+
+        earnings['hourly_xmr']  = (hashrate * xmr_per_hash_per_day) / 24
+        earnings['daily_xmr']   = hashrate * xmr_per_hash_per_day
+        earnings['weekly_xmr']  = earnings['daily_xmr'] * 7
         earnings['monthly_xmr'] = earnings['daily_xmr'] * 30
-        
-        # USD calculations
-        earnings['daily_usd'] = earnings['daily_xmr'] * Config.XMR_PRICE
-        earnings['weekly_usd'] = earnings['weekly_xmr'] * Config.XMR_PRICE
-        earnings['monthly_usd'] = earnings['monthly_xmr'] * Config.XMR_PRICE
-        
+
+        earnings['daily_usd']   = earnings['daily_xmr']   * live_price
+        earnings['weekly_usd']  = earnings['weekly_xmr']  * live_price
+        earnings['monthly_usd'] = earnings['monthly_xmr'] * live_price
+
         return earnings
 
 # ============================================================================

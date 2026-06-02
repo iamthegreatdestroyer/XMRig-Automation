@@ -24,14 +24,62 @@ param(
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DashboardDir = Join-Path $ScriptDir "dashboard"
 $ConfigDir = Join-Path $ScriptDir "config"
+$XMRigRunDir = "C:\XMRig\xmrig-6.22.0"
+$RuntimeConfigPath = "$XMRigRunDir\config.json"
+$SecureStoragePath = "$env:APPDATA\XMRig\secure"
+$RuntimeTokenFile  = "$SecureStoragePath\api-token.txt"
+
+# ============================================================================
+# SECURE RUNTIME CONFIG INJECTION
+# ============================================================================
+# Reads the repo's config template (no secrets), injects the DPAPI-decrypted
+# wallet and API token at runtime, writes to XMRig's working directory.
+# The running config in C:\XMRig\xmrig-6.22.0\ is NOT committed to git.
+
+function Invoke-SecureConfigInjection {
+    # Ensure token exists; generate if first run
+    if (-not (Test-Path $RuntimeTokenFile)) {
+        Write-Host "  No API token found — generating new token..." -ForegroundColor Yellow
+        . "$ScriptDir\security\Generate-APIToken.ps1"
+    }
+    $apiToken = (Get-Content $RuntimeTokenFile -Raw).Trim()
+
+    # Load repo config template
+    $templatePath = "$ConfigDir\config.json"
+    if (-not (Test-Path $templatePath)) {
+        Write-Host "  ERROR: Config template not found: $templatePath" -ForegroundColor Red
+        return $false
+    }
+    $config = Get-Content $templatePath -Raw | ConvertFrom-Json
+
+    # Inject API token
+    $config.http.'access-token' = $apiToken
+
+    # Inject wallet from DPAPI if using placeholder
+    if ($config.pools[0].user -eq "__SECURE_WALLET__") {
+        . "$ScriptDir\security\Secure-WalletManager.ps1" | Out-Null
+        $wallet = Unprotect-WalletAddress
+        if ($wallet) {
+            $config.pools | ForEach-Object { if ($_.user -eq "__SECURE_WALLET__") { $_.user = $wallet } }
+            Write-Host "  Wallet injected from DPAPI secure storage." -ForegroundColor Green
+        } else {
+            Write-Host "  WARNING: Could not decrypt wallet. Check DPAPI storage." -ForegroundColor Yellow
+        }
+    }
+
+    # Write runtime config to XMRig working directory
+    $config | ConvertTo-Json -Depth 10 | Set-Content $RuntimeConfigPath -Force
+    Write-Host "  Runtime config written: $RuntimeConfigPath" -ForegroundColor Green
+    return $true
+}
 
 # Service definitions
 $Services = @(
     @{
         Name         = "XMRigMiner"
         ProcessName  = "xmrig"
-        StartCommand = "C:\XMRig\xmrig-6.22.0\xmrig.exe --config=config.json"
-        WorkingDir   = "C:\XMRig\xmrig-6.22.0"
+        StartCommand = "$XMRigRunDir\xmrig.exe --config=config.json"
+        WorkingDir   = $XMRigRunDir
         Description  = "XMRig cryptocurrency miner"
     },
     @{
@@ -47,6 +95,20 @@ $Services = @(
         StartCommand = "python web_dashboard.py"
         WorkingDir   = $DashboardDir
         Description  = "Web-based monitoring dashboard"
+    },
+    @{
+        Name         = "PoolFlightTable"
+        ProcessName  = "python"
+        StartCommand = "python pool_flight_table.py --daemon"
+        WorkingDir   = (Join-Path $ScriptDir "intelligence")
+        Description  = "Pool latency flight table (dynamic routing)"
+    },
+    @{
+        Name         = "PriorityController"
+        ProcessName  = "powershell"
+        StartCommand = "powershell -ExecutionPolicy Bypass -File priority_controller.ps1 -Silent"
+        WorkingDir   = (Join-Path $ScriptDir "intelligence")
+        Description  = "Adaptive process priority (user-idle detection)"
     }
 )
 
@@ -193,6 +255,11 @@ if ($Restart) {
 }
 else {
     Write-Header "STARTING XMRIG AUTOMATION PRODUCTION SERVICES"
+    Write-Host "Injecting secure runtime configuration..." -ForegroundColor Yellow
+    $injected = Invoke-SecureConfigInjection
+    if (-not $injected) {
+        Write-Host "WARNING: Config injection failed. Proceeding with existing runtime config." -ForegroundColor Yellow
+    }
     foreach ($service in $Services) {
         Start-Service -Service $service
     }

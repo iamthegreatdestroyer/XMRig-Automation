@@ -14,6 +14,7 @@ License: MIT
 """
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Any
@@ -214,18 +215,38 @@ class XMRigAPIError(Exception):
 
 _default_client: Optional[XMRigAPIClient] = None
 
+_SECURE_TOKEN_FILE = os.path.join(
+    os.environ.get('APPDATA', os.path.expanduser('~')),
+    'XMRig', 'secure', 'api-token.txt'
+)
+
+
+def _load_api_token() -> str:
+    """Load API token from DPAPI-secured runtime file. Falls back to env var."""
+    token = os.environ.get('XMRIG_API_TOKEN')
+    if token:
+        return token
+    try:
+        if os.path.exists(_SECURE_TOKEN_FILE):
+            with open(_SECURE_TOKEN_FILE, 'r') as f:
+                return f.read().strip()
+    except OSError:
+        pass
+    return ""
+
 
 def get_client(
     host: str = "127.0.0.1",
     port: int = 24808,
-    access_token: str = "xmrig-secure-token-2025"
+    access_token: Optional[str] = None
 ) -> XMRigAPIClient:
-    """Get or create default API client."""
+    """Get or create default API client, loading token from secure storage."""
     global _default_client
-    
+
     if _default_client is None:
-        _default_client = XMRigAPIClient(host, port, access_token)
-    
+        resolved_token = access_token or _load_api_token()
+        _default_client = XMRigAPIClient(host, port, resolved_token)
+
     return _default_client
 
 
@@ -260,7 +281,7 @@ if __name__ == "__main__":
     client = XMRigAPIClient(
         host="127.0.0.1",
         port=24808,
-        access_token="xmrig-secure-token-2025"
+        access_token=_load_api_token()
     )
     
     print(f"  Base URL: {client.base_url}")
