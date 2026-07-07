@@ -5,8 +5,24 @@ Predictive thermal management to prevent CPU throttling using linear regression.
 from collections import deque
 from dataclasses import dataclass
 from typing import Tuple, Optional, Callable
+import os
+import sys
 import time
 import statistics
+
+
+def _log_decision(event: str, reason_code: str, detail: dict,
+                   state_before: Optional[dict] = None,
+                   state_after: Optional[dict] = None):
+    """Best-effort structured decision logging (never breaks thermal control)."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from intelligence.decision_logger import DecisionLogger
+        DecisionLogger().log(source="thermal", event=event, reason_code=reason_code,
+                             detail=detail, state_before=state_before or {},
+                             state_after=state_after or {})
+    except Exception:
+        pass
 
 
 @dataclass
@@ -27,6 +43,7 @@ class ThermalPredictor:
         self.config = config or ThermalConfig()
         self._readings: deque = deque(maxlen=self.config.window_size)
         self._timestamps: deque = deque(maxlen=self.config.window_size)
+        self._last_throttle_verdict: Optional[bool] = None
     
     def add_reading(self, temp: float, timestamp: Optional[float] = None) -> None:
         """Add a temperature reading to the sliding window."""
@@ -77,13 +94,26 @@ class ThermalPredictor:
         """Determine if preemptive throttling is needed."""
         if not self._readings:
             return False, 0.0
-        
+
         current, predicted = self._readings[-1], self.predict()
         if current >= self.config.max_temp:
-            return True, predicted
-        if predicted >= self.config.max_temp - self.config.throttle_margin:
-            return True, predicted
-        return False, predicted
+            verdict, reason = True, "TEMP_AT_MAX"
+        elif predicted >= self.config.max_temp - self.config.throttle_margin:
+            verdict, reason = True, "TEMP_FORECAST"
+        else:
+            verdict, reason = False, "TEMP_NORMAL"
+
+        if verdict != self._last_throttle_verdict:
+            _log_decision(
+                event="throttle_verdict_changed", reason_code=reason,
+                detail={"current_temp": current, "predicted_temp": predicted,
+                        "max_temp": self.config.max_temp,
+                        "throttle_margin": self.config.throttle_margin},
+                state_before={"should_throttle": self._last_throttle_verdict},
+                state_after={"should_throttle": verdict},
+            )
+            self._last_throttle_verdict = verdict
+        return verdict, predicted
     
     @property
     def current_temp(self) -> float:
@@ -146,20 +176,34 @@ class ThermalController:
     
     def _reduce(self) -> str:
         reduction = 2 if self.predictor.current_temp >= self.config.max_temp else 1
+        old = self.current_threads
         new = max(self.min_threads, self.current_threads - reduction)
         if new != self.current_threads:
             self.current_threads = new
             if self._adjuster:
                 self._adjuster(new)
+            _log_decision(
+                event="threads_reduced", reason_code="THERMAL_THROTTLE",
+                detail={"temp": self.predictor.current_temp,
+                        "predicted": self.predictor.predict()},
+                state_before={"threads": old}, state_after={"threads": new},
+            )
             return f"reduced_to_{new}"
         return "at_minimum"
-    
+
     def _increase(self) -> str:
+        old = self.current_threads
         new = min(self.max_threads, self.current_threads + 1)
         if new != self.current_threads:
             self.current_threads = new
             if self._adjuster:
                 self._adjuster(new)
+            _log_decision(
+                event="threads_increased", reason_code="THERMAL_RECOVERY",
+                detail={"temp": self.predictor.current_temp,
+                        "predicted": self.predictor.predict()},
+                state_before={"threads": old}, state_after={"threads": new},
+            )
             return f"increased_to_{new}"
         return "at_maximum"
     

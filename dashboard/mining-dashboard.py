@@ -301,6 +301,35 @@ class DataReaderThread(QThread):
 
         return earnings
 
+
+class AdvisorWorker(QThread):
+    """Runs one MiningAdvisor question on a background thread so the
+    ~15s duty-cycled inference (mining downshifts to 4 threads while
+    this runs) never blocks the UI. One-shot: call start(), consume
+    finished_signal once, discard."""
+    finished_signal = pyqtSignal(str)
+
+    def __init__(self, question: str):
+        super().__init__()
+        self.question = question
+
+    def run(self):
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from intelligence.advisor import MiningAdvisor
+            resp = MiningAdvisor().answer(self.question)
+            text = resp.answer
+            if resp.fabricated_evidence:
+                text += "\n\n[WARNING: unverified evidence detected and rejected]"
+            elif not resp.valid:
+                text += "\n\n[Note: response did not pass schema validation]"
+            if resp.confidence:
+                text += f"\n\nConfidence: {resp.confidence}"
+        except Exception as e:
+            text = f"Advisor error: {e}"
+        self.finished_signal.emit(text)
+
+
 # ============================================================================
 # MAIN DASHBOARD WINDOW
 # ============================================================================
@@ -638,11 +667,18 @@ class MiningDashboard(QMainWindow):
             self.status_label.setStyleSheet("color: #ff0000; font-size: 16px; padding: 10px;")
         
         # Update mining stats
-        self.hashrate_label.setText(f"{data['xmrig']['hashrate']:.2f} H/s")
+        # XMRig's API reports null for any rolling-average window that hasn't
+        # accumulated enough uptime yet (e.g. 15m average right after start) —
+        # guard every field, not just the one that happens to be null right now.
+        xmrig_hashrate = data['xmrig'].get('hashrate') or 0.0
+        hr_10s = data['xmrig'].get('hashrate_10s') or 0.0
+        hr_60s = data['xmrig'].get('hashrate_60s') or 0.0
+        hr_15m = data['xmrig'].get('hashrate_15m') or 0.0
+        self.hashrate_label.setText(f"{xmrig_hashrate:.2f} H/s")
         self.hashrate_detail_label.setText(
-            f"{data['xmrig']['hashrate_10s']:.1f} / "
-            f"{data['xmrig']['hashrate_60s']:.1f} / "
-            f"{data['xmrig']['hashrate_15m']:.1f} H/s"
+            f"{hr_10s:.1f} / "
+            f"{hr_60s:.1f} / "
+            f"{hr_15m:.1f} H/s"
         )
         self.accepted_label.setText(str(data['xmrig']['accepted']))
         self.rejected_label.setText(str(data['xmrig']['rejected']))

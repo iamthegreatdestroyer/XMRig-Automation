@@ -25,6 +25,7 @@ License: MIT
 import argparse
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -64,6 +65,25 @@ Rules:
    is always true.
 4. Respond ONLY with JSON matching this schema (no prose outside JSON):
 """ + json.dumps(RESPONSE_SCHEMA, indent=2)
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+_MD_FENCE_RE = re.compile(r"^```(?:markdown)?\s*\n(.*)\n```\s*$", re.DOTALL)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove a model's <think>...</think> reasoning block and an outer
+    markdown code fence, if present, leaving just the final answer.
+
+    Reasoning models (lfm2.5 in REFLECT mode) emit visible chain-of-thought
+    before the answer — valuable for interactive debugging (MiningAdvisor
+    keeps it in .raw), but it must not leak into a written reflection file
+    meant to be read as plain markdown.
+    """
+    text = _THINK_BLOCK_RE.sub("", text).strip()
+    fence_match = _MD_FENCE_RE.match(text)
+    if fence_match:
+        text = fence_match.group(1).strip()
+    return text
 
 
 @dataclass
@@ -197,11 +217,28 @@ class MiningAdvisor:
             last = resp
         return last
 
-    def nightly_reflect(self) -> str:
+    def nightly_reflect(self) -> Optional[str]:
         """Heavy REFLECT-mode job: summarize the day's decision log.
-        Writes logs/reflections/YYYY-MM-DD.md and returns the path."""
-        records = self.logger.tail(500)
+        Writes logs/reflections/YYYY-MM-DD.md and returns the path.
+
+        Returns None (writing nothing) if the thermal gate deferred the
+        job rather than running it — that is not a failure, it means
+        "try again later tonight," and a scheduler should retry rather
+        than record a misleading "(reflection failed)" file.
+
+        Idempotent: if today's reflection already exists, returns its
+        path immediately without re-running inference. This lets a
+        scheduler safely fire this repeatedly (e.g. every 30 min via
+        Task Scheduler's native repetition) as a retry mechanism for
+        thermal deferrals — once one run succeeds, later firings in
+        the same night are harmless no-ops.
+        """
         today = datetime.now(timezone.utc).date().isoformat()
+        existing_path = os.path.join(REFLECTIONS_DIR, f"{today}.md")
+        if os.path.exists(existing_path):
+            return existing_path
+
+        records = self.logger.tail(500)
         day_records = [r for r in records if r.get("ts", "").startswith(today)]
         log_text = "\n".join(json.dumps(r, separators=(",", ":"))
                              for r in day_records) or "(no events today)"
@@ -217,9 +254,17 @@ class MiningAdvisor:
             InferenceJob(prompt=prompt, model=self.reflect_model,
                          heavy=True, duration_est_s=120)
         )
+        if not decision.admitted:
+            self.logger.log(
+                source="advisor", event="nightly_reflection_deferred",
+                reason_code=decision.reason_code,
+                detail={"events_pending": len(day_records)},
+            )
+            return None
+
         os.makedirs(REFLECTIONS_DIR, exist_ok=True)
         path = os.path.join(REFLECTIONS_DIR, f"{today}.md")
-        content = decision.result or "(reflection failed)"
+        content = _strip_thinking(decision.result) if decision.result else "(model returned no output)"
         with open(path, "w", encoding="utf-8") as f:
             f.write(f"# Mining Reflection — {today}\n\n{content}\n")
         self.logger.log(
@@ -285,7 +330,12 @@ if __name__ == "__main__":
     if args.ask:
         _print_response(advisor.answer(args.ask))
     elif args.reflect:
-        print(f"Reflection written: {advisor.nightly_reflect()}")
+        path = advisor.nightly_reflect()
+        if path:
+            print(f"Reflection written: {path}")
+        else:
+            print("Deferred: thermal gate blocked the job. Retry later.")
+            sys.exit(2)  # distinct exit code so a scheduler knows to retry
     elif args.audit:
         sys.exit(_audit(advisor))
     else:

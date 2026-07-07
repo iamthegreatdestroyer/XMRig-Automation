@@ -11,14 +11,18 @@ Arms: thread percentages mapped to approximate thread counts
   87% → 14 threads
   100% → 16 threads
 
-Reward metric: H/s per watt (if smart plug unavailable, uses H/s alone).
+Reward metric: net USD/day (XMR revenue minus modeled electricity cost,
+see intelligence/profitability.py) — not raw H/s. This lets the bandit
+legitimately discover that fewer threads, or not mining at all, is the
+net-optimal choice on a 15W laptop.
 
 State is persisted to JSON so the bandit survives reboots and continues
 accumulating evidence across sessions.
 
 Usage:
     python ucb1_bandit.py             # Show current recommendation
-    python ucb1_bandit.py --record 8 1950.0  # Record a measurement
+    python ucb1_bandit.py --auto              # Measure + record automatically (preferred)
+    python ucb1_bandit.py --record 50 1950.0  # Manually record a raw-H/s result (legacy)
     python ucb1_bandit.py --apply             # Apply recommendation to config
 """
 
@@ -40,6 +44,25 @@ REPO_CONFIG   = r"C:\Users\sgbil\XMRig-Automation\config\config.json"
 # Arms defined as (max-threads-hint %, approx threads on 16-thread CPU)
 ARMS = [50, 62, 75, 87, 100]
 
+# Physical cores are the even logical indices on this 8C/16T Zen3+ chip;
+# odd indices are their SMT siblings. RandomX prefers physical cores
+# (shared execution ports/cache make SMT siblings a net loss), so every
+# arm fills physical cores first and only adds SMT siblings past 8 threads.
+_PHYSICAL_CORES = [0, 2, 4, 6, 8, 10, 12, 14]
+_SMT_SIBLINGS = [1, 3, 5, 7, 9, 11, 13, 15]
+
+
+def _cores_for_hint(hint: int) -> list:
+    """Map an arm's hint% to an explicit core list (see module docstring
+    for the hint->thread-count table). This is what actually controls
+    XMRig: cpu.rx (explicit list) takes priority over max-threads-hint
+    whenever both are present."""
+    threads = round(hint / 100 * 16)
+    threads = max(1, min(16, threads))
+    if threads <= 8:
+        return _PHYSICAL_CORES[:threads]
+    return _PHYSICAL_CORES + _SMT_SIBLINGS[:threads - 8]
+
 
 def _log_decision(event: str, reason_code: str, detail: dict):
     """Best-effort structured decision logging (never breaks the bandit)."""
@@ -49,6 +72,67 @@ def _log_decision(event: str, reason_code: str, detail: dict):
                              reason_code=reason_code, detail=detail)
     except Exception:
         pass
+
+
+def _read_current_hint(config_path: str = XMRIG_CONFIG) -> Optional[int]:
+    """Infer which arm XMRig is currently running as, from the REAL
+    authoritative setting (cpu.rx's explicit core list), not the
+    max-threads-hint field admission.py's duty-cycling has made stale.
+
+    Returns None if cpu.rx's length doesn't match any known arm (e.g.
+    mining is transiently in admission.py's 4-thread QUERY mode
+    mid-duty-cycle) — the caller should skip recording in that case
+    rather than attribute the measurement to the wrong arm.
+    """
+    try:
+        with open(config_path) as f:
+            rx = json.load(f)['cpu']['rx']
+    except (OSError, KeyError, json.JSONDecodeError):
+        return None
+    threads = len(rx)
+    for hint in ARMS:
+        if round(hint / 100 * 16) == threads:
+            return hint
+    return None
+
+
+def auto_record(state: 'BanditState') -> Optional[float]:
+    """Measure live hashrate, compute power-aware reward, record it.
+
+    Reward is XMR-revenue-usd/day minus electricity-cost/day (see
+    intelligence/profitability.py) rather than raw H/s, so the bandit
+    can legitimately discover that fewer threads (or not mining at all)
+    is net-optimal. Returns the recorded reward, or None if the miner
+    wasn't reachable.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from dashboard.xmrig_api_client import get_client
+    from intelligence.profitability import power_aware_reward
+
+    hint = _read_current_hint()
+    if hint is None:
+        print("Could not attribute current thread count to a known arm — "
+              "config unreadable, or mining is transiently mid duty-cycle "
+              "(e.g. admission.py's QUERY mode). Try again once settled "
+              "back into a steady MINING-mode thread count.")
+        return None
+
+    client = get_client()  # auto-loads the secure API token
+    try:
+        hashrate = client.get_summary(use_cache=False).hashrate_10s
+    except Exception as e:
+        print(f"Could not reach XMRig API: {e}")
+        return None
+    if not hashrate:
+        print("Miner reachable but reporting zero hashrate — not recording.")
+        return None
+
+    result = power_aware_reward(hashrate)
+    state.record(hint, result['reward_usd_day'])
+    print(f"Auto-recorded: hint={hint}%, hashrate={hashrate:.1f} H/s, "
+          f"net reward=${result['reward_usd_day']:.4f}/day "
+          f"({'profitable' if result['profitable'] else 'NET LOSS'})")
+    return result['reward_usd_day']
 
 
 @dataclass
@@ -123,20 +207,38 @@ class BanditState:
 
 
 def apply_hint(hint: int, config_path: str = XMRIG_CONFIG):
-    """Write max-threads-hint to XMRig config."""
+    """Apply an arm's thread count to XMRig config.
+
+    Writes an explicit cpu.rx core list (see _cores_for_hint) — this is
+    what XMRig actually obeys. max-threads-hint is also written for
+    documentation, but XMRig ignores it whenever cpu.rx is an explicit
+    list rather than null/auto, which it always is once admission.py's
+    duty-cycling has touched the config.
+
+    KNOWN LIMITATION: intelligence/admission.py's AdmissionController
+    restores mining to its own hardcoded FULL_THREADS (8 cores) after
+    every query/reflect duty cycle, regardless of what arm the bandit
+    has applied here. If the bandit picks a >8-thread arm as best, the
+    next advisor question will silently revert it to 8 threads. Not
+    fixed here (would mean admission.py reading the bandit's live best
+    arm instead of a constant) — flagged as a follow-up, out of scope
+    for Sprint 3.
+    """
     if not os.path.exists(config_path):
         print(f"Config not found: {config_path}")
         return False
     with open(config_path) as f:
         config = json.load(f)
+    cores = _cores_for_hint(hint)
     config['cpu']['max-threads-hint'] = hint
+    config['cpu']['rx'] = cores
     with open(config_path, 'w') as f:
         json.dump(config, f, indent=2)
     _log_decision(
         event="hint_applied", reason_code="UCB1_APPLY",
-        detail={"hint": hint, "config": config_path},
+        detail={"hint": hint, "cores": cores, "config": config_path},
     )
-    print(f"Applied max-threads-hint: {hint}% to {config_path}")
+    print(f"Applied hint={hint}% -> {len(cores)} threads {cores} to {config_path}")
     return True
 
 
@@ -146,14 +248,14 @@ def print_status(state: BanditState):
     print("+--------------------------------------------------------+")
     print(f"  Total measurements: {state.total_pulls}")
     print()
-    print(f"  {'Hint%':>6}  {'~Threads':>8}  {'Pulls':>6}  {'Mean H/s':>10}  {'UCB1':>10}")
-    print(f"  {'------':>6}  {'--------':>8}  {'-----':>6}  {'--------':>10}  {'----':>10}")
+    print(f"  {'Hint%':>6}  {'~Threads':>8}  {'Pulls':>6}  {'Mean $/day':>11}  {'UCB1':>11}")
+    print(f"  {'------':>6}  {'--------':>8}  {'-----':>6}  {'-----------':>11}  {'-----------':>11}")
     for arm in state.arms:
         approx_threads = round(arm.hint / 100 * 16)
         ucb = arm.ucb1(max(state.total_pulls, 1))
-        ucb_str = f"{ucb:.2f}" if ucb != float('inf') else "  (unexplored)"
-        mean_str = f"{arm.mean:.1f}" if arm.pulls > 0 else "  -"
-        print(f"  {arm.hint:>6}  {approx_threads:>8}  {arm.pulls:>6}  {mean_str:>10}  {ucb_str:>10}")
+        ucb_str = f"{ucb:.4f}" if ucb != float('inf') else "  (unexplored)"
+        mean_str = f"{arm.mean:.4f}" if arm.pulls > 0 else "  -"
+        print(f"  {arm.hint:>6}  {approx_threads:>8}  {arm.pulls:>6}  {mean_str:>11}  {ucb_str:>11}")
 
     next_arm = state.select_arm()
     print(f"\n  Next explore: hint={next_arm.hint}% (~{round(next_arm.hint/100*16)} threads)")
@@ -161,14 +263,18 @@ def print_status(state: BanditState):
     if state.total_pulls >= 3:
         best = state.best_arm()
         print(f"  Best so far:  hint={best.hint}% (~{round(best.hint/100*16)} threads) "
-              f"@ {best.mean:.1f} H/s avg")
+              f"@ ${best.mean:.4f}/day avg net reward")
     print()
 
 
 def main():
     parser = argparse.ArgumentParser(description="UCB1 Thread-Count Bandit")
     parser.add_argument('--record', nargs=2, metavar=('HINT', 'HASHRATE'),
-                        help="Record result: --record 50 1950.0")
+                        help="Record a raw-hashrate result: --record 50 1950.0 "
+                             "(legacy; prefer --auto for power-aware reward)")
+    parser.add_argument('--auto', action='store_true',
+                        help="Measure live hashrate + compute power-aware "
+                             "USD/day reward automatically, then record it")
     parser.add_argument('--apply', action='store_true',
                         help="Apply the current best recommendation to config")
     parser.add_argument('--next', action='store_true',
@@ -183,6 +289,10 @@ def main():
         state.record(hint, reward)
         state.save()
         print(f"Recorded: hint={hint}%, hashrate={reward:.1f} H/s")
+
+    elif args.auto:
+        if auto_record(state) is not None:
+            state.save()
 
     elif args.apply:
         if state.total_pulls < 3:
