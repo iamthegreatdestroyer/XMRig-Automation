@@ -24,7 +24,8 @@ from urllib.request import urlopen
 from urllib.error import URLError
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QGroupBox, QGridLayout, QPushButton, QTextEdit, QProgressBar
+    QLabel, QGroupBox, QGridLayout, QPushButton, QTextEdit, QProgressBar,
+    QLineEdit
 )
 from PyQt6.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QPalette, QColor
@@ -350,6 +351,7 @@ class MiningDashboard(QMainWindow):
         right_column = QVBoxLayout()
         right_column.addWidget(self.create_system_stats_group())
         right_column.addWidget(self.create_pool_info_group())
+        right_column.addWidget(self.create_advisor_group())
         content_layout.addLayout(right_column, 1)
         
         main_layout.addLayout(content_layout)
@@ -531,6 +533,70 @@ class MiningDashboard(QMainWindow):
         
         group.setLayout(layout)
         return group
+    
+    def create_advisor_group(self):
+        """Create the 'Ask the Miner' LLM advisor pane (Local Intelligence Layer)."""
+        group = QGroupBox("🧠 ASK THE MINER")
+        group.setStyleSheet(self.group_style())
+        layout = QVBoxLayout()
+
+        # Mode indicator
+        self.advisor_mode_label = QLabel("Mode: MINING")
+        self.advisor_mode_label.setStyleSheet("color: #00ff41; font-weight: bold;")
+        layout.addWidget(self.advisor_mode_label)
+
+        # Question input + button
+        input_row = QHBoxLayout()
+        self.advisor_input = QLineEdit()
+        self.advisor_input.setPlaceholderText("Why did hashrate drop?")
+        self.advisor_input.setStyleSheet(
+            "background-color: #1a1a1a; color: #e0e0e0; padding: 6px;"
+            "border: 1px solid #333; border-radius: 4px;")
+        self.advisor_input.returnPressed.connect(self.ask_advisor)
+        input_row.addWidget(self.advisor_input)
+
+        self.advisor_ask_btn = QPushButton("Ask")
+        self.advisor_ask_btn.clicked.connect(self.ask_advisor)
+        self.advisor_ask_btn.setStyleSheet(self.button_style())
+        input_row.addWidget(self.advisor_ask_btn)
+        layout.addLayout(input_row)
+
+        # Answer display
+        self.advisor_output = QTextEdit()
+        self.advisor_output.setReadOnly(True)
+        self.advisor_output.setMaximumHeight(160)
+        self.advisor_output.setStyleSheet(
+            "background-color: #0d0d0d; color: #00aaff;"
+            "font-family: 'Courier New'; font-size: 11px;")
+        self.advisor_output.setPlaceholderText(
+            "Answers cite evidence from the decision log. "
+            "Mining downshifts to 4 threads during inference (~15s).")
+        layout.addWidget(self.advisor_output)
+
+        group.setLayout(layout)
+        return group
+
+    def ask_advisor(self):
+        """Run advisor question on a worker thread (never blocks the UI)."""
+        question = self.advisor_input.text().strip()
+        if not question:
+            return
+        if getattr(self, '_advisor_worker', None) and self._advisor_worker.isRunning():
+            return  # one question at a time
+        self.advisor_ask_btn.setEnabled(False)
+        self.advisor_mode_label.setText("Mode: QUERY (mining at 4 threads)")
+        self.advisor_mode_label.setStyleSheet("color: #ffaa00; font-weight: bold;")
+        self.advisor_output.setPlainText("Thinking (duty-cycled)...")
+
+        self._advisor_worker = AdvisorWorker(question)
+        self._advisor_worker.finished_signal.connect(self._on_advisor_answer)
+        self._advisor_worker.start()
+
+    def _on_advisor_answer(self, text: str):
+        self.advisor_output.setPlainText(text)
+        self.advisor_ask_btn.setEnabled(True)
+        self.advisor_mode_label.setText("Mode: MINING")
+        self.advisor_mode_label.setStyleSheet("color: #00ff41; font-weight: bold;")
     
     def create_log_viewer(self):
         """Create log viewer"""

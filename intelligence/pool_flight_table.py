@@ -123,6 +123,22 @@ class PoolFlightTable:
     def write_status(self):
         best = self.best_pool()
         os.makedirs(os.path.dirname(STATUS_FILE), exist_ok=True)
+        # Decision-log recommendation changes (best-effort, never fatal)
+        if best and getattr(self, "_last_recommended", None) != best.key:
+            try:
+                from intelligence.decision_logger import DecisionLogger
+                DecisionLogger().log(
+                    source="pool_flight", event="recommendation_changed",
+                    reason_code="LATENCY_SCORE",
+                    detail={"pool": best.key, "url": best.pool_url(),
+                            "latency_ms": best.latency_ms,
+                            "score": round(best.score, 4)},
+                    state_before={"pool": getattr(self, "_last_recommended", None)},
+                    state_after={"pool": best.key},
+                )
+            except Exception:
+                pass
+            self._last_recommended = best.key
         status = {
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
             'recommended_pool': best.pool_url() if best else None,

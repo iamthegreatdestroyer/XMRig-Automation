@@ -139,19 +139,25 @@ class XMRigAPIClient:
         self._last_fetch_time: float = 0
         self._cache_ttl: float = 1.0  # 1 second cache
     
-    def _request(self, endpoint: str) -> dict:
+    def _request(self, endpoint: str, method: str = "GET", body: Optional[dict] = None) -> dict:
         """Make authenticated request to API."""
         url = f"{self.base_url}{endpoint}"
-        
+
         headers = {}
         if self.access_token:
             headers['Authorization'] = f'Bearer {self.access_token}'
-        
-        request = Request(url, headers=headers)
-        
+
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode('utf-8')
+            headers['Content-Type'] = 'application/json'
+
+        request = Request(url, data=data, headers=headers, method=method)
+
         try:
             with urlopen(request, timeout=self.timeout) as response:
-                return json.loads(response.read().decode('utf-8'))
+                raw = response.read().decode('utf-8')
+                return json.loads(raw) if raw.strip() else {}
         except (URLError, HTTPError) as e:
             raise XMRigAPIError(f"API request failed: {e}")
     
@@ -178,6 +184,18 @@ class XMRigAPIClient:
     def get_config(self) -> dict:
         """Get current configuration."""
         return self._request('/2/config')
+
+    def put_config(self, config: dict) -> bool:
+        """Replace running configuration (requires restricted: false).
+
+        XMRig hot-reloads the config; RandomX dataset stays resident when
+        only the thread affinity list changes.
+        """
+        try:
+            self._request('/2/config', method='PUT', body=config)
+            return True
+        except XMRigAPIError:
+            return False
     
     def pause(self) -> bool:
         """Pause mining."""

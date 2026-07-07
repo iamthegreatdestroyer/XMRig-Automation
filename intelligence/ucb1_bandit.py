@@ -41,6 +41,16 @@ REPO_CONFIG   = r"C:\Users\sgbil\XMRig-Automation\config\config.json"
 ARMS = [50, 62, 75, 87, 100]
 
 
+def _log_decision(event: str, reason_code: str, detail: dict):
+    """Best-effort structured decision logging (never breaks the bandit)."""
+    try:
+        from intelligence.decision_logger import DecisionLogger
+        DecisionLogger().log(source="ucb1_bandit", event=event,
+                             reason_code=reason_code, detail=detail)
+    except Exception:
+        pass
+
+
 @dataclass
 class ArmState:
     hint: int          # max-threads-hint percentage
@@ -73,6 +83,12 @@ class BanditState:
         arm.pulls += 1
         arm.total_reward += reward
         self.total_pulls += 1
+        _log_decision(
+            event="reward_recorded", reason_code="UCB1_UPDATE",
+            detail={"hint": hint, "reward": reward, "pulls": arm.pulls,
+                    "mean": round(arm.mean, 4),
+                    "total_pulls": self.total_pulls},
+        )
 
     def best_arm(self) -> ArmState:
         """Arm with highest mean reward (exploitation only)."""
@@ -116,6 +132,10 @@ def apply_hint(hint: int, config_path: str = XMRIG_CONFIG):
     config['cpu']['max-threads-hint'] = hint
     with open(config_path, 'w') as f:
         json.dump(config, f, indent=2)
+    _log_decision(
+        event="hint_applied", reason_code="UCB1_APPLY",
+        detail={"hint": hint, "config": config_path},
+    )
     print(f"Applied max-threads-hint: {hint}% to {config_path}")
     return True
 
