@@ -214,7 +214,40 @@ class MiningMetrics:
             "xmrig_errors_total",
             "Total errors encountered"
         )
-    
+
+        # --- Local Intelligence Layer / admission-controller metrics
+        # (Sprint 4.2, Sigma ecosystem federation) ---
+        self.inference_latency = self.registry.gauge(
+            "xmrig_inference_latency_seconds",
+            "Duration of the most recent LLM inference call, in seconds"
+        )
+        self.inference_mode = self.registry.gauge(
+            "xmrig_inference_mode",
+            "1 for the admission controller's current mode, 0 for the others"
+        )
+        self.advisor_calls = self.registry.counter(
+            "xmrig_advisor_calls_total",
+            "Total advisor calls (questions answered + nightly reflections)"
+        )
+        self.admission_queue_depth = self.registry.gauge(
+            "xmrig_admission_queue_depth",
+            "Number of inference jobs currently queued behind the thermal gate"
+        )
+        self.hashrate_minutes_lost = self.registry.counter(
+            "xmrig_hashrate_minutes_lost_total",
+            "Cumulative minutes mining was reduced or paused for LLM "
+            "inference duty-cycling"
+        )
+
+    _INFERENCE_MODES = ("MINING", "QUERY", "REFLECT", "COOLDOWN")
+
+    def record_mode(self, mode: str):
+        """Set the given mode's xmrig_inference_mode{mode=...} series to 1
+        and all other known modes to 0, so exactly one series reads 1 at
+        any given time (the standard Prometheus enum-gauge pattern)."""
+        for m in self._INFERENCE_MODES:
+            self.inference_mode.labels(mode=m).set(1.0 if m == mode else 0.0)
+
     def update(self, data: dict):
         """Update all metrics from mining data dict."""
         if 'hashrate' in data:

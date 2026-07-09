@@ -54,6 +54,20 @@ RECOVERY_TIMEOUT_S = 45.0  # config PUT re-inits dataset (~6s) + 10s hashrate
 CANARY_TOLERANCE = 0.85  # restored hashrate must reach 85% of baseline
 
 
+def _metrics():
+    """Best-effort accessor for the Prometheus metrics registry (Sprint
+    4.2). Returns None if no metrics server has been started (e.g. under
+    test, or if this instrumentation isn't wanted) -- every call site
+    must guard for that rather than assume metrics are always running.
+    Never raises: a metrics-recording failure must never be allowed to
+    affect mining or inference admission."""
+    try:
+        from dashboard.prometheus_metrics import get_metrics
+        return get_metrics()
+    except Exception:
+        return None
+
+
 class Mode(Enum):
     MINING = "MINING"
     QUERY = "QUERY"
@@ -144,6 +158,9 @@ class AdmissionController:
             self._queue.append(job)
             self._log("thermal_gate", "TEMP_FORECAST",
                       detail={"queued": True, "model": job.model})
+            m = _metrics()
+            if m:
+                m.admission_queue_depth.set(len(self._queue))
             return AdmissionDecision(
                 admitted=False, mode=Mode.COOLDOWN,
                 reason_code="TEMP_FORECAST",
@@ -162,6 +179,9 @@ class AdmissionController:
             self._transition(target_mode, baseline)
         else:
             self.mode = target_mode
+        m = _metrics()
+        if m:
+            m.record_mode(target_mode.value)
 
         # 3. Execute
         t0 = time.time()
@@ -171,6 +191,10 @@ class AdmissionController:
         except Exception as e:  # inference failure must never strand mining
             result, error = None, str(e)
         elapsed = time.time() - t0
+        m = _metrics()
+        if m:
+            m.inference_latency.set(elapsed)
+            m.advisor_calls.inc()
 
         # 4. Restore
         recovery_s = None
@@ -183,6 +207,12 @@ class AdmissionController:
             self._transition(Mode.MINING, baseline, recovery_s=recovery_s)
         else:
             self.mode = Mode.MINING
+        m = _metrics()
+        if m:
+            m.record_mode(Mode.MINING.value)
+            if mining:
+                lost_s = elapsed + (recovery_s or 0.0)
+                m.hashrate_minutes_lost.inc(lost_s / 60.0)
 
         # 5. Canary check
         if mining and recovery_s is None:
