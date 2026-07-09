@@ -4,10 +4,12 @@ Run: python -m pytest tests/test_advisor.py -v
   or: python tests/test_advisor.py
 """
 
+import json
 import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -169,6 +171,41 @@ class TestNightlyReflect(unittest.TestCase):
                 adv.REFLECTIONS_DIR = original_dir
             self.assertEqual(path, existing)
             admission.request.assert_not_called()  # no inference re-run
+
+    def test_uses_rolling_24h_window_not_utc_calendar_date(self):
+        """Regression test: nightly_reflect must use a rolling 24h window,
+        not a UTC-calendar-date string match, so a locally-scheduled run
+        (e.g. 03:00 US Eastern = ~07:00-08:00 UTC) doesn't silently exclude
+        most of the prior day's real events just because they fall on a
+        different UTC calendar date than "now"."""
+        advisor, admission = make_advisor()
+        now = datetime.now(timezone.utc)
+        old_ts = (now - timedelta(hours=25)).isoformat(timespec="seconds")
+        recent_ts = (now - timedelta(hours=1)).isoformat(timespec="seconds")
+        with open(advisor.logger.log_path, "a", encoding="utf-8") as f:
+            for ts, code in [(old_ts, "OLD_MARKER"), (recent_ts, "RECENT_MARKER")]:
+                f.write(json.dumps({
+                    "ts": ts, "source": "thermal", "event": "marker_event",
+                    "detail": {}, "state_before": {}, "state_after": {},
+                    "reason_code": code,
+                }) + "\n")
+
+        admission.request.return_value = AdmissionDecision(
+            admitted=True, mode=Mode.MINING, reason_code="ADMITTED_DUTY_CYCLE",
+            result="## Summary\nfine.",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import intelligence.advisor as adv
+            original_dir = adv.REFLECTIONS_DIR
+            adv.REFLECTIONS_DIR = tmpdir
+            try:
+                advisor.nightly_reflect()
+            finally:
+                adv.REFLECTIONS_DIR = original_dir
+
+        sent_prompt = admission.request.call_args[0][0].prompt
+        self.assertIn("RECENT_MARKER", sent_prompt)
+        self.assertNotIn("OLD_MARKER", sent_prompt)
 
 
 if __name__ == "__main__":

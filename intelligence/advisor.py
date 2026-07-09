@@ -28,7 +28,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -68,6 +68,19 @@ Rules:
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 _MD_FENCE_RE = re.compile(r"^```(?:markdown)?\s*\n(.*)\n```\s*$", re.DOTALL)
+
+
+def _parse_ts(ts: str) -> datetime:
+    """Parse a decision-log ISO timestamp for time-window filtering.
+
+    Returns the Unix epoch on a malformed/missing ts so such a record is
+    naturally excluded from any "last N hours" window rather than crashing
+    the whole filter.
+    """
+    try:
+        return datetime.fromisoformat(ts)
+    except (ValueError, TypeError):
+        return datetime.fromtimestamp(0, tz=timezone.utc)
 
 
 def _strip_thinking(text: str) -> str:
@@ -239,9 +252,10 @@ class MiningAdvisor:
             return existing_path
 
         records = self.logger.tail(500)
-        day_records = [r for r in records if r.get("ts", "").startswith(today)]
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        day_records = [r for r in records if _parse_ts(r.get("ts", "")) >= cutoff]
         log_text = "\n".join(json.dumps(r, separators=(",", ":"))
-                             for r in day_records) or "(no events today)"
+                             for r in day_records) or "(no events in the last 24 hours)"
 
         prompt = (
             "You are the nightly mining analyst. Summarize today's decision "
