@@ -1,8 +1,12 @@
 # XMRig Automation - Git Ignore File
 
-# Sensitive wallet information (if you want to keep wallet private)
-# Uncomment the next line if you want to exclude wallet from public repo:
-# config/config.json
+# Live mining config with real wallet address. The tracked reference is
+# config/config-template.json; config.json is populated locally and NOT
+# committed. (Previously tracked; untracked as of this change. The address
+# is a public Monero RECEIVE address, so no funds/keys are exposed, but it
+# still exists in prior git history -- rotate the address if you want the
+# operator identity unlinked from those old commits.)
+config/config.json
 
 # XMRig executable and binaries (users should download their own)
 *.exe
