@@ -5,6 +5,7 @@ Run: python -m pytest tests/test_ucb1_bandit.py -v
 """
 
 import json
+import math
 import os
 import sys
 import tempfile
@@ -14,7 +15,8 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from intelligence.ucb1_bandit import (  # noqa: E402
-    ARMS, BanditState, _cores_for_hint, _read_current_hint, auto_record,
+    ARMS, ArmState, BanditState, _cores_for_hint, _normalize_reward,
+    _read_current_hint, auto_record,
 )
 
 
@@ -102,6 +104,49 @@ class TestAutoRecord(unittest.TestCase):
             reward = auto_record(state)
         self.assertIsNone(reward)
         self.assertEqual(state.total_pulls, 0)
+
+
+class TestRewardNormalization(unittest.TestCase):
+    """UCB1 reward normalization: the exploration term assumes rewards in
+    [0,1], but rewards are net USD/day (~+/-0.06). Without normalizing, the
+    exploration bonus dwarfs the signal ~30x and the bandit never exploits."""
+
+    def test_normalize_bounds_midpoint_and_clamp(self):
+        self.assertAlmostEqual(_normalize_reward(-0.10), 0.0)
+        self.assertAlmostEqual(_normalize_reward(0.10), 1.0)
+        self.assertAlmostEqual(_normalize_reward(0.0), 0.5)
+        # Rewards outside the plausible range clamp; never escape [0,1].
+        self.assertEqual(_normalize_reward(5.0), 1.0)
+        self.assertEqual(_normalize_reward(-5.0), 0.0)
+
+    def test_ucb1_uses_normalized_exploitation_not_raw(self):
+        # An arm with an absurd raw mean of 5.0 USD/day must contribute a
+        # normalized (clamped-to-1.0) exploitation term, NOT the raw 5.0.
+        arm = ArmState(hint=50, pulls=1, total_reward=5.0)  # mean == 5.0
+        expected = 1.0 + math.sqrt(2 * math.log(2) / 1)
+        self.assertAlmostEqual(arm.ucb1(total_pulls=2), expected, places=6)
+        # The old (buggy) score would have been 5.0 + bonus (~6.18).
+        self.assertLess(arm.ucb1(total_pulls=2), 2.5)
+
+    def test_higher_reward_arm_scores_higher_at_equal_pulls(self):
+        # At equal pull counts the exploration bonus cancels, so the better
+        # net-USD/day arm must win -- and by the normalized gap, not the tiny
+        # raw gap.
+        good = ArmState(hint=50, pulls=20, total_reward=20 * 0.06)   # mean +0.06
+        bad = ArmState(hint=100, pulls=20, total_reward=20 * -0.06)  # mean -0.06
+        self.assertGreater(good.ucb1(total_pulls=40), bad.ucb1(total_pulls=40))
+
+    def test_best_arm_still_ranks_by_raw_usd_per_day(self):
+        # best_arm() (exploitation) must still pick highest raw USD/day, not
+        # the normalized value. Set arm state directly to avoid record()'s
+        # decision-log side effect.
+        state = BanditState()
+        for arm in state.arms:
+            if arm.hint == 50:
+                arm.pulls, arm.total_reward = 1, 0.06
+            elif arm.hint == 62:
+                arm.pulls, arm.total_reward = 1, 0.02
+        self.assertEqual(state.best_arm().hint, 50)
 
 
 if __name__ == "__main__":

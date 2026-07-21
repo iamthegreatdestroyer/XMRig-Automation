@@ -135,6 +135,25 @@ def auto_record(state: 'BanditState') -> Optional[float]:
     return result['reward_usd_day']
 
 
+# UCB1's exploration term sqrt(2 ln N / n) assumes rewards in [0,1]. Our
+# rewards are net USD/day (roughly -0.06..+0.06 on a 15W laptop), so without
+# normalization the exploration bonus (~2 early on) dwarfs the reward signal
+# by ~30x and the bandit round-robins forever, never exploiting. Map the
+# reward to [0,1] via a fixed plausible range before feeding it to UCB1's
+# exploitation term. best_arm() still ranks by the RAW USD/day mean (that is
+# the actual objective); only the explore/exploit balance uses the normalized
+# value.
+REWARD_MIN_USD_DAY = -0.10
+REWARD_MAX_USD_DAY = 0.10
+
+
+def _normalize_reward(usd_day: float) -> float:
+    """Map a net-USD/day reward onto [0,1] for UCB1 (clamped)."""
+    span = REWARD_MAX_USD_DAY - REWARD_MIN_USD_DAY
+    norm = (usd_day - REWARD_MIN_USD_DAY) / span
+    return max(0.0, min(1.0, norm))
+
+
 @dataclass
 class ArmState:
     hint: int          # max-threads-hint percentage
@@ -148,7 +167,11 @@ class ArmState:
     def ucb1(self, total_pulls: int) -> float:
         if self.pulls == 0:
             return float('inf')
-        return self.mean + math.sqrt(2 * math.log(total_pulls) / self.pulls)
+        # Exploitation term normalized to [0,1] so it is on the same scale as
+        # UCB1's exploration term (which assumes rewards in [0,1]). Without
+        # this the USD/day mean (~0.02) is dwarfed ~30x by the bonus and the
+        # bandit never exploits. best_arm() still ranks by the raw USD/day mean.
+        return _normalize_reward(self.mean) + math.sqrt(2 * math.log(total_pulls) / self.pulls)
 
 
 @dataclass
