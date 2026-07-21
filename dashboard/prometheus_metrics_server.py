@@ -27,6 +27,8 @@ import json
 import logging
 import os
 import time
+import urllib.error
+import urllib.request
 
 from prometheus_metrics import start_metrics_server
 
@@ -42,6 +44,97 @@ DECISION_LOG_PATH = os.path.join(
     "logs", "decision_log.jsonl",
 )
 TAIL_POLL_INTERVAL_S = 10
+
+# xmrig's own local HTTP API (host/port/access-token) is the real source
+# of truth for hashrate/shares/pool latency. Previously this server only
+# ever set those metrics once at startup to hardcoded placeholder values
+# and never touched them again -- this reads the real numbers from xmrig
+# itself on the same poll cadence as the decision-log tail.
+#
+# NOTE: this reads XMRig's RUNTIME config, not the repo's config/config.json
+# template -- production-start.ps1 injects the real DPAPI-decrypted
+# access-token into C:\XMRig\xmrig-6.22.0\config.json at startup; the repo
+# template only ever holds the "__API_TOKEN__" placeholder.
+XMRIG_CONFIG_PATH = r"C:\XMRig\xmrig-6.22.0\config.json"
+
+
+def _load_xmrig_api():
+    """Read xmrig's own HTTP API host/port/token from its config.json so
+    the token isn't duplicated/hardcoded here."""
+    try:
+        with open(XMRIG_CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        http_cfg = cfg.get("http", {})
+        if not http_cfg.get("enabled"):
+            return None
+        host = http_cfg.get("host", "127.0.0.1")
+        port = http_cfg.get("port", 16000)
+        token = http_cfg.get("access-token")
+        return "http://%s:%d" % (host, port), token
+    except (OSError, ValueError, TypeError, AttributeError):
+        # Fail soft on ANY malformed config (missing file, bad JSON, a
+        # non-int/None "port" that would make "%d" raise TypeError, or a
+        # non-dict shape that makes .get raise AttributeError) so a bad
+        # config can never crash the long-lived metrics server loop.
+        return None
+
+
+def _poll_xmrig(metrics, last_shares):
+    """Pull real stats from xmrig's own API and push them into the
+    metrics that were previously frozen at hardcoded init values. Returns
+    the (accepted, rejected) totals seen this poll, for delta-tracking on
+    the next call (xmrig's API reports cumulative totals; the Prometheus
+    counters need increments)."""
+    api = _load_xmrig_api()
+    if not api:
+        return last_shares
+    base_url, token = api
+    if not token:
+        return last_shares
+    req = urllib.request.Request(
+        base_url + "/2/summary",
+        headers={"Authorization": "Bearer " + token},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            summary = json.load(r)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        logger.warning(f"xmrig API poll failed (continuing): {e}")
+        return last_shares
+
+    hr = (summary.get("hashrate") or {}).get("total", [None])[0]
+    if isinstance(hr, (int, float)):
+        metrics.hashrate.labels(algorithm=summary.get("algo", "rx/0")).set(hr)
+
+    conn = summary.get("connection") or {}
+    ping = conn.get("ping")
+    pool = conn.get("pool") or "unknown"
+    if isinstance(ping, (int, float)):
+        metrics.pool_latency.labels(pool=pool).set(ping)
+
+    prev_accepted, prev_rejected = last_shares
+    accepted = conn.get("accepted", prev_accepted)
+    rejected = conn.get("rejected", prev_rejected)
+    if accepted >= prev_accepted:
+        metrics.shares_accepted.inc(accepted - prev_accepted)
+    if rejected >= prev_rejected:
+        metrics.shares_rejected.inc(rejected - prev_rejected)
+
+    # Real-signal health proxy -- xmrig's API exposes no hardware
+    # thermal/voltage data, so this isn't a literal sensor reading. It
+    # reflects connectivity + active hashing + a low reject ratio, which
+    # is the closest honest substitute available from this API.
+    total = accepted + rejected
+    reject_ratio = (rejected / total) if total else 0.0
+    connected = bool(conn.get("pool")) and not summary.get("paused", True)
+    if connected and hr and reject_ratio < 0.05:
+        metrics.health_score.set(100.0)
+    elif connected:
+        metrics.health_score.set(50.0)
+    else:
+        metrics.health_score.set(0.0)
+
+    return (accepted, rejected)
 
 
 def _tail_new_lines(path: str, offset: int) -> tuple:
@@ -100,14 +193,20 @@ def main():
         metrics = start_metrics_server(port=29100)
         logger.info("Metrics server started on port 29100")
 
-        # Update initial metrics
-        metrics.hashrate.labels(algorithm="rx/0").set(0)
-        metrics.cpu_temp.set(25.0)
+        # Register the share counters at 0 so they appear in /metrics
+        # immediately; real values (and everything else here) come from
+        # the first xmrig API poll below, not a hardcoded guess.
         metrics.shares_accepted.inc(0)
         metrics.shares_rejected.inc(0)
-        metrics.pool_latency.labels(pool="unknown").set(0)
-        metrics.health_score.set(100)
         metrics.record_mode("MINING")
+
+        # cpu_temp intentionally NOT set here -- xmrig's own API exposes
+        # no thermal data, and this server has no other real source for
+        # it. Better to leave it absent from /metrics (renders "n/a" on
+        # the dashboard) than keep faking a frozen 25.0C reading.
+
+        last_shares = (0, 0)
+        last_shares = _poll_xmrig(metrics, last_shares)
 
         # Start tailing decision_log.jsonl from its current end -- only
         # events from this point forward are counted. This is standard
@@ -131,6 +230,8 @@ def main():
             except Exception as e:  # noqa: BLE001
                 # A tailing hiccup must never crash the metrics server.
                 logger.warning(f"decision_log tail error (continuing): {e}")
+
+            last_shares = _poll_xmrig(metrics, last_shares)
 
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
