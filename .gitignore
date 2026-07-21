@@ -32,6 +32,7 @@ $RECYCLE.BIN/
 # IDE and editor files
 .vscode/
 .idea/
+.history/
 *.swp
 *.swo
 *~

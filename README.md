@@ -4,8 +4,9 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011-blue.svg)](https://www.microsoft.com/windows)
 [![XMRig](https://img.shields.io/badge/XMRig-6.22.0-orange.svg)](https://github.com/xmrig/xmrig)
 [![Monero](https://img.shields.io/badge/Cryptocurrency-Monero-orange.svg)](https://www.getmonero.org/)
+[![Intelligence Layer](https://img.shields.io/badge/Local%20Intelligence-LLM%20advisor-8A2BE2.svg)](#-local-intelligence-layer)
 
-**Complete, production-ready XMRig Monero mining automation for Windows 11.** This project provides turnkey automation - download XMRig, run the setup, and never touch it again.
+**Zero-touch XMRig Monero mining automation for Windows 11 — now with a local, privacy-preserving LLM intelligence layer.** Download XMRig, run the setup, and it mines, self-optimizes, and explains its own decisions in plain English. All inference runs locally (Ollama); nothing about your mining leaves the machine.
 
 ---
 
@@ -13,47 +14,88 @@
 
 ### 🚀 Zero-Touch Operation
 
-- **One-click installation** - Single PowerShell script handles everything
-- **Auto-start on boot** - Mining begins automatically 30 seconds after Windows starts
-- **Auto-restart on crash** - Infinite loop ensures mining never stops
-- **No maintenance required** - Set it and forget it
+- **One-click installation** — a single PowerShell script handles everything
+- **Auto-start on boot** — mining begins automatically shortly after Windows starts
+- **Auto-restart on crash** — a supervised loop keeps mining alive
+- **No maintenance required** — set it and forget it
 
 ### ⚡ Performance Optimized
 
-- **Huge pages support** - 15-20% hashrate boost
-- **MSR mod enabled** - Additional 5-10% performance gain
-- **Optimal thread configuration** - 75% CPU usage (12 of 16 threads on Ryzen 7 7730U)
-- **Expected hashrate:** 1,800-2,200 H/s on AMD Ryzen 7 7730U
+- **Huge pages support** — meaningful hashrate boost on RandomX
+- **MSR mod** — additional RandomX performance gain
+- **Adaptive thread management** — the intelligence layer tunes thread count and duty-cycles around local inference (see below)
+
+### 🧠 Local Intelligence Layer (new)
+
+- **LLM mining advisor** — ask "why did hashrate drop?" and get a grounded, cited answer from a *local* model
+- **Nightly reflections** — an automatic, LLM-written daily summary of every mining decision
+- **Deterministic decision engine** — a UCB1 bandit, thermal predictor, and profitability model make the actual calls; the LLM only *explains*, never controls
+- **Zero-fabrication guardrail** — advisor answers are schema-validated against a structured decision log; unsupported claims are rejected
+- **Ecosystem federation** — reflections are embedded and stored for semantic retrieval (Ollama + a vector store)
 
 ### 📊 Monitoring & Control
 
-- **🖥️ Desktop GUI Dashboard** - Native Windows application with real-time mining data
-- **Live hashrate tracking** - 10s/60s/15m averages from actual XMRig logs
-- **System monitoring** - CPU usage, temperature, memory with visual progress bars
-- **Earnings calculator** - Real-time projections based on current hashrate
-- **Auto-refresh** - Updates every 2 seconds without manual intervention
-- **Pool dashboard integration** - Direct links to check earnings
+- **🖥️ Desktop GUI dashboard** — native PyQt6 app with real-time mining data and an "Ask the Miner" pane
+- **Live hashrate tracking** — 10s / 60s / 15m averages from actual XMRig logs
+- **Prometheus metrics** — real hashrate, pool latency, shares, inference latency, and admission-queue depth, scraped from XMRig's own HTTP API
+- **Earnings calculator** — power-aware net projections (revenue minus electricity), not just raw H/s
 
 ### 🛠️ Lifecycle Management
 
-- **Automated updates** - Check for new XMRig versions with one command
-- **Configuration backup** - Timestamped backups with retention policy
-- **Clean uninstall** - Complete removal including scheduled tasks and exclusions
-
-### 📚 Comprehensive Documentation
-
-- **Complete README** - Everything you need to know
-- **FAQ** - 30+ common questions answered
-- **Troubleshooting guide** - Solutions for every common issue
-- **Analysis reports** - GPU, 1GB pages, pool configuration explained
+- **Automated updates**, **timestamped config backups**, and a **clean uninstall** (removes scheduled tasks and exclusions)
 
 ---
 
-## 🎯 Quick Start (3 Steps)
+## 🧠 Local Intelligence Layer
+
+The intelligence layer is split into two strictly decoupled halves. **A deterministic engine makes every mining decision. A local LLM only reads a structured log and explains those decisions.** The LLM cannot change mining state — any action it proposes is emitted with `requires_ratification: true` and is never executed automatically. This separation is the core safety property.
+
+### Deterministic decision engine (`intelligence/`, `ml/`)
+
+| Module | Role |
+| ------ | ---- |
+| `ucb1_bandit.py` | UCB1 multi-armed bandit that optimizes thread count against a **power-aware reward** (net USD/day, not raw hashrate) |
+| `admission.py` | Admission controller that duty-cycles mining (8→4 threads) around a local inference request and restores it after, via XMRig's config hot-swap |
+| `ml/thermal_predictor.py` | Predictive thermal gate — defers heavy jobs when predicted temperature is too high |
+| `profitability.py` | Net-revenue model (XMR revenue − electricity cost) |
+| `pool_flight_table.py` | Pool selection / failover bookkeeping |
+| `monte_carlo.py` | Profitability / variance simulation |
+| `decision_logger.py` | Appends every decision to `logs/decision_log.jsonl` (the single source of truth the advisor reads) |
+
+### LLM explanation engine (`intelligence/advisor.py`)
+
+- **QUERY mode** — `granite4.1:3b`, tuned for instant, valid JSON answers to interactive questions
+- **REFLECT mode** — `lfm2.5`, used for the heavier nightly reflection
+- **Grounding** — answers are validated against the decision log; fabricated evidence is detected and flagged
+- **Duty-cycled** — a query briefly drops mining to 4 threads, runs inference, and restores full threads (no RandomX dataset re-init for QUERY mode)
+
+```powershell
+# Ask the miner a question (grounded, local, no data leaves the machine)
+python -m intelligence.advisor --ask "Why did hashrate drop most recently?"
+
+# Run the nightly reflection now (writes logs/reflections/YYYY-MM-DD.md)
+python -m intelligence.advisor --reflect
+
+# 10-shot schema / zero-fabrication audit
+python -m intelligence.advisor --audit
+```
+
+### Nightly reflection + Ollama pre-flight guard
+
+A Windows scheduled task (**"XMRig Nightly Reflection"**, daily at 03:00) writes an LLM summary of the day's decisions. It runs through a pre-flight guard, `setup/ensure-ollama-and-reflect.ps1`, which **verifies Ollama's server is actually listening before invoking the reflection** — closing a silent-failure mode where Ollama's tray app keeps running (and auto-updates itself) but the `ollama serve` backend does not relaunch, leaving nothing on port 11434 and turning every reflection into an empty stub.
+
+```powershell
+# Register the guarded nightly-reflection task
+.\setup\create-reflection-scheduled-task.ps1 -RepoPath "C:\Users\YOUR_USERNAME\XMRig-Automation"
+```
+
+---
+
+## 🎯 Quick Start
 
 ### 1. Download XMRig
 
-Download the latest XMRig from the [official GitHub releases](https://github.com/xmrig/xmrig/releases) and extract to `C:\XMRig\`
+Download the latest XMRig from the [official GitHub releases](https://github.com/xmrig/xmrig/releases) and extract to `C:\XMRig\`.
 
 ### 2. Run Master Setup
 
@@ -65,22 +107,27 @@ cd C:\Users\YOUR_USERNAME\XMRig-Automation
 
 ### 3. Restart Computer
 
-After setup completes, restart to enable huge pages for optimal performance.
+After setup completes, restart to enable huge pages for optimal performance. **Mining starts automatically on every boot.**
 
-**That's it!** Mining starts automatically on every boot.
-
-### 🖥️ Launch Desktop Dashboard (Optional)
-
-Monitor your mining in real-time with the native desktop GUI:
+### 4. (Optional) Enable the Intelligence Layer
 
 ```powershell
-cd C:\Users\YOUR_USERNAME\XMRig-Automation
+# Install Ollama (https://ollama.com) and pull the two models:
+ollama pull granite4.1:3b      # interactive QUERY mode
+ollama pull lfm2.5             # nightly REFLECT mode
+
+# Install Python deps and register the guarded nightly reflection:
+pip install -r dashboard/requirements.txt
+.\setup\create-reflection-scheduled-task.ps1 -RepoPath "$PWD"
+```
+
+### 5. (Optional) Launch the Desktop Dashboard
+
+```powershell
 .\START-DASHBOARD.ps1
 ```
 
-**First time?** The script will automatically install Python dependencies (PyQt6, psutil).
-
-See [`dashboard/README-DASHBOARD.md`](dashboard/README-DASHBOARD.md) for complete documentation.
+See [`dashboard/README-DASHBOARD.md`](dashboard/README-DASHBOARD.md) for complete dashboard documentation.
 
 ---
 
@@ -89,23 +136,25 @@ See [`dashboard/README-DASHBOARD.md`](dashboard/README-DASHBOARD.md) for complet
 ### Hardware
 
 - **CPU:** AMD Ryzen or Intel processor (8+ threads recommended)
-- **RAM:** 8 GB minimum (32 GB recommended for best performance)
-- **Storage:** 500 MB free space for XMRig and logs
-- **Internet:** Stable connection for pool communication
+- **RAM:** 8 GB minimum; **16 GB+ recommended** if running the intelligence layer (the LLMs load into RAM)
+- **Storage:** ~1 GB for XMRig + logs; several GB more for local models
+- **Internet:** stable connection for pool communication
 
 ### Software
 
 - **OS:** Windows 10/11 (64-bit)
 - **PowerShell:** 5.1 or higher
 - **.NET Framework:** 4.7.2 or higher
-- **Administrator access:** Required for setup
+- **Administrator access:** required for setup (huge pages / MSR)
+- **Python:** 3.x — required for the dashboard and intelligence layer
+- **Ollama:** required for the intelligence layer (local LLM inference)
 
 ### Tested Configuration
 
 - **CPU:** AMD Ryzen 7 7730U (8 cores, 16 threads)
-- **RAM:** 32 GB DDR4 @ 3200 MHz
+- **RAM:** 32 GB
 - **OS:** Windows 11 Pro
-- **Hashrate:** 1,800-2,200 H/s with huge pages
+- **Measured hashrate:** ~1,150–1,250 H/s (RandomX, 8 threads, as run by the intelligence layer)
 
 ---
 
@@ -115,48 +164,47 @@ See [`dashboard/README-DASHBOARD.md`](dashboard/README-DASHBOARD.md) for complet
 XMRig-Automation/
 ├── MASTER-SETUP.ps1                 # Main orchestration script
 ├── ENABLE-HUGEPAGES.ps1             # Huge pages enabler
-├── START-DASHBOARD.ps1              # 🆕 Desktop dashboard launcher
-├── .gitignore                       # Git ignore rules
+├── START-DASHBOARD.ps1              # Desktop dashboard launcher
+├── .gitignore
 │
-├── config/                          # Configuration files
+├── config/                          # Configuration
 │   ├── config.json                  # Optimized XMRig config
 │   ├── config-template.json         # Template with placeholders
-│   └── CONFIG-EXPLAINED.md          # Configuration guide
+│   └── CONFIG-EXPLAINED.md
+│
+├── intelligence/                    # 🧠 Deterministic decision engine + LLM advisor
+│   ├── advisor.py                   # LLM explanation engine (QUERY/REFLECT, grounded)
+│   ├── ucb1_bandit.py               # Power-aware thread-count optimizer
+│   ├── admission.py                 # Duty-cycle admission controller
+│   ├── profitability.py             # Net-revenue (power-aware) model
+│   ├── pool_flight_table.py         # Pool selection / failover
+│   ├── monte_carlo.py               # Profitability simulation
+│   ├── decision_logger.py           # Structured decision log writer
+│   └── ryzanstein_sync.py           # Reflection → vector-store federation
+│
+├── ml/
+│   └── thermal_predictor.py         # Predictive thermal gate
+│
+├── dashboard/                       # Desktop GUI + metrics
+│   ├── mining-dashboard.py          # PyQt6 app ("Ask the Miner" pane)
+│   ├── prometheus_metrics.py        # Metric registry
+│   ├── prometheus_metrics_server.py # Metrics server (reads XMRig's live API)
+│   ├── requirements.txt
+│   └── README-DASHBOARD.md
 │
 ├── setup/                           # Setup scripts
-│   ├── install.ps1                  # Download & install XMRig
-│   ├── configure-defender.ps1       # Windows Defender exclusions
-│   ├── configure-hugepages.ps1      # Huge pages configuration
-│   └── create-scheduled-task.ps1    # Auto-start task creation
+│   ├── install.ps1
+│   ├── configure-defender.ps1
+│   ├── configure-hugepages.ps1
+│   ├── create-scheduled-task.ps1            # Mining auto-start
+│   ├── create-reflection-scheduled-task.ps1 # Nightly reflection (guarded)
+│   └── ensure-ollama-and-reflect.ps1        # Ollama pre-flight guard
 │
 ├── scripts/                         # Mining control scripts
-│   ├── start-mining.bat             # Start with auto-restart
-│   ├── stop-mining.bat              # Graceful shutdown
-│   ├── view-logs.bat                # Real-time log viewer
-│   ├── check-status.ps1             # Status dashboard
-│   └── monitor-performance.ps1      # Performance monitor
-│
-├── dashboard/                       # 🆕 Desktop GUI Dashboard
-│   ├── mining-dashboard.py          # PyQt6 desktop application
-│   ├── requirements.txt             # Python dependencies
-│   ├── README-DASHBOARD.md          # Complete dashboard docs
-│   └── QUICK-REFERENCE.md           # Quick reference card
-│
-├── tools/                           # Utility tools
-│   ├── update-xmrig.ps1             # Automated updater
-│   ├── backup-config.ps1            # Configuration backup
-│   └── uninstall.ps1                # Complete removal
-│
-├── shortcuts/                       # Desktop shortcuts
-│   └── create-desktop-shortcuts.ps1 # Shortcut creator
-│
-├── monitoring/                      # Monitoring configuration
-│   └── alert-config.json            # Alert thresholds
-│
-└── docs/                            # Documentation
-    ├── README.md                    # Main documentation
-    ├── FAQ.md                       # Frequently asked questions
-    └── TROUBLESHOOTING.md           # Problem-solving guide
+├── tools/                           # update / backup / uninstall
+├── tests/                           # pytest suite (advisor, bandit, admission, thermal, worker)
+├── logs/                            # decision_log.jsonl + reflections/ (git-ignored)
+└── docs/                            # README / FAQ / TROUBLESHOOTING
 ```
 
 ---
@@ -167,34 +215,39 @@ XMRig-Automation/
 
 - **Pool:** pool.hashvault.pro:3333
 - **Algorithm:** RandomX (rx/0)
-- **Threads:** 75% CPU usage (adjustable)
-- **Huge Pages:** Enabled
+- **Threads:** managed by the intelligence layer (8 physical cores, duty-cycled during inference)
+- **Huge Pages:** enabled
 - **Donation:** 1% to XMRig developers
 
-### Customization
-
-Edit `config/config.json` to change:
-
-- Mining pool URL
-- Wallet address
-- Thread count (max-threads-hint)
-- Pool password/rig ID
-- Log file location
+Edit `config/config.json` to change the pool URL, wallet address, thread configuration, pool password/rig ID, and the XMRig HTTP API (host/port/access-token) that the dashboard and metrics server read.
 
 ---
 
-## 📊 Expected Performance
+## 📊 Performance
 
-| Metric               | Value                           |
-| -------------------- | ------------------------------- |
-| **Hashrate**         | 1,800-2,200 H/s (Ryzen 7 7730U) |
-| **CPU Usage**        | ~75% (12 of 16 threads)         |
-| **Temperature**      | 70-80°C                         |
-| **Power Draw**       | ~35W CPU                        |
-| **Daily Earnings**   | ~$0.04-0.05 USD                 |
-| **Monthly Earnings** | ~$1.20-1.50 USD                 |
+| Metric               | Value                                    |
+| -------------------- | ---------------------------------------- |
+| **Hashrate**         | ~1,150–1,250 H/s measured (Ryzen 7 7730U, 8 threads) |
+| **Threads**          | 8 physical cores (→4 during LLM inference) |
+| **Temperature**      | thermally gated (heavy jobs deferred when hot) |
+| **Reward metric**    | net USD/day (revenue − electricity)      |
 
-_Performance varies by hardware and pool difficulty_
+_Higher raw hashrate is possible with all 16 threads + huge pages, at the cost of system responsiveness. Performance varies by hardware and pool difficulty._
+
+---
+
+## 🧪 Testing
+
+```powershell
+# Unit tests (advisor, bandit, admission controller, thermal predictor, dashboard worker)
+python -m pytest tests/ -q
+
+# Dashboard logic smoke test
+python test-dashboard-logic.py
+
+# Advisor zero-fabrication audit
+python -m intelligence.advisor --audit
+```
 
 ---
 
@@ -205,114 +258,36 @@ _Performance varies by hardware and pool difficulty_
 - **URL:** pool.hashvault.pro:3333
 - **Fee:** 0.9%
 - **Minimum Payout:** 0.1 XMR
-- **Payment Schedule:** Every 2 hours (if threshold met)
 - **Dashboard:** https://hashvault.pro/monero
 
-### Check Your Earnings
-
-Visit the pool dashboard and enter your wallet address to view:
-
-- Current hashrate
-- Total shares submitted
-- Pending balance
-- Payment history
-- Worker status
+Visit the pool dashboard and enter your wallet address to view hashrate, shares, pending balance, and payment history.
 
 ---
 
 ## 🛡️ Security & Legal
 
-### Antivirus False Positives
-
-XMRig is often flagged as a PUP (Potentially Unwanted Program) by antivirus software. The `configure-defender.ps1` script adds Windows Defender exclusions. For third-party antivirus, add exclusions manually.
-
-### Legal Notice
-
-- Cryptocurrency mining is legal in most jurisdictions
-- Only mine on hardware you own
-- Check local electricity costs and regulations
-- This software is provided as-is without warranty
-
-### Privacy
-
-- Your wallet address is stored locally in config.json
-- No personal information is transmitted to the pool (only wallet address)
-- Pool dashboard is public (anyone can view stats with wallet address)
-
----
-
-## 🚀 Usage
-
-### Desktop Shortcuts (After Setup)
-
-- **Start Mining** - Begins mining with auto-restart
-- **Stop Mining** - Gracefully stops the miner
-- **Check Status** - View current status and stats
-- **View Logs** - Real-time log monitoring
-- **Monitor Performance** - Performance dashboard
-- **Pool Dashboard** - Opens pool website
-
-### Command Line
-
-```powershell
-# Check status
-.\scripts\check-status.ps1
-
-# Monitor performance
-.\scripts\monitor-performance.ps1
-
-# Update XMRig
-.\tools\update-xmrig.ps1
-
-# Backup configuration
-.\tools\backup-config.ps1
-
-# Uninstall everything
-.\tools\uninstall.ps1
-```
-
----
-
-## 🔄 Updating
-
-To update XMRig to the latest version:
-
-```powershell
-# Automated update
-.\tools\update-xmrig.ps1
-
-# Manual update
-1. Stop mining
-2. Download new XMRig release
-3. Replace xmrig.exe
-4. Keep existing config.json
-5. Restart mining
-```
+- **Antivirus false positives:** XMRig is often flagged as a PUP. `setup/configure-defender.ps1` adds Windows Defender exclusions; add exclusions manually for third-party AV.
+- **Local-only inference:** the intelligence layer runs entirely on-device via Ollama. No mining data, prompts, or reflections are sent to any external AI service.
+- **Privacy:** your wallet address is stored locally in `config.json`; only the wallet address is shared with the pool (pool stats are public).
+- **Legal:** mine only on hardware you own; check local electricity costs and regulations. Provided as-is without warranty.
 
 ---
 
 ## ❓ Troubleshooting
 
-### XMRig Not Starting
+### Nightly reflections are empty ("model returned no output")
 
-- Check if xmrig.exe exists in installation directory
-- Verify Windows Defender hasn't quarantined it
-- Run `.\setup\configure-defender.ps1` to add exclusions
+Ollama's server isn't listening. Ollama's Windows tray app can keep running (and auto-update itself) while the `ollama serve` backend stays down after an update, reboot, or sleep — so nothing listens on port 11434. Start it with `ollama serve`, or rely on the pre-flight guard (`setup/ensure-ollama-and-reflect.ps1`) that the reflection task uses to auto-start it.
 
-### Low Hashrate
+### XMRig not starting
 
-- Ensure huge pages are enabled (restart required)
-- Check if running as Administrator (MSR mod needs admin)
-- Verify temperature is below 85°C
-- Reduce thread count if CPU is thermal throttling
+- Verify `xmrig.exe` exists in `C:\XMRig\xmrig-6.22.0\`
+- Check Windows Defender hasn't quarantined it; run `setup/configure-defender.ps1`
 
-### Pool Connection Errors
+### Low hashrate
 
-- Check internet connectivity
-- Try alternative pool (see docs/README.md for pool list)
-- Verify pool URL is correct in config.json
-
-### Full Troubleshooting
+- Ensure huge pages are enabled (restart required) and setup ran as Administrator (MSR mod)
+- Verify the CPU isn't thermal-throttling
 
 See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for comprehensive solutions.
 
@@ -320,91 +295,40 @@ See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for comprehensive solutions.
 
 ## 📖 Documentation
 
-- **[README.md](docs/README.md)** - Complete project guide
-- **[FAQ.md](docs/FAQ.md)** - 30+ common questions
-- **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** - Problem-solving
-- **[CONFIG-EXPLAINED.md](config/CONFIG-EXPLAINED.md)** - Configuration reference
-- **[VALIDATION-CHECKLIST.md](VALIDATION-CHECKLIST.md)** - Testing guide
+- **[docs/README.md](docs/README.md)** — complete project guide
+- **[docs/FAQ.md](docs/FAQ.md)** — common questions
+- **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — problem-solving
+- **[config/CONFIG-EXPLAINED.md](config/CONFIG-EXPLAINED.md)** — configuration reference
+- **[dashboard/README-DASHBOARD.md](dashboard/README-DASHBOARD.md)** — dashboard docs
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-### Areas for Contribution
-
-- Additional pool configurations
-- Support for other mining algorithms
-- Web-based dashboard
-- Email alert implementation
-- Multi-GPU support
-- macOS/Linux compatibility
+Contributions are welcome — fork, branch, test thoroughly, and open a pull request.
 
 ---
 
 ## 📜 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License — see [LICENSE](LICENSE).
 
 ### Third-Party Software
 
-- **XMRig:** GPL-3.0 License - https://github.com/xmrig/xmrig
-- **Monero:** BSD-3-Clause License - https://github.com/monero-project/monero
-
----
-
-## 🙏 Acknowledgments
-
-- **XMRig Team** - For the excellent mining software
-- **Monero Community** - For the privacy-focused cryptocurrency
-- **HashVault Pool** - For reliable mining pool service
-- **Contributors** - Everyone who helped improve this project
-
----
-
-## 📞 Support
-
-- **Issues:** https://github.com/sgbilod/XMRig-Automation/issues
-- **XMRig Support:** https://github.com/xmrig/xmrig/issues
-- **Monero Support:** https://www.reddit.com/r/Monero/
+- **XMRig:** GPL-3.0 — https://github.com/xmrig/xmrig
+- **Monero:** BSD-3-Clause — https://github.com/monero-project/monero
+- **Ollama:** MIT — https://github.com/ollama/ollama
 
 ---
 
 ## ⚠️ Disclaimer
 
-This software is provided for educational purposes. Cryptocurrency mining:
-
-- May violate workplace policies
-- Consumes electricity (calculate profitability)
-- Generates heat (ensure proper cooling)
-- May void hardware warranties
-- Is not profitable on most consumer hardware
-
-**Use at your own risk.** The authors are not responsible for:
-
-- Hardware damage
-- Electricity costs
-- Loss of earnings
-- Violation of policies or laws
+This software is provided for educational purposes. Cryptocurrency mining consumes electricity, generates heat, may violate workplace policies, and is not profitable on most consumer hardware. **Use at your own risk** — the authors are not responsible for hardware damage, electricity costs, lost earnings, or policy/legal violations.
 
 ---
 
-## 🌟 Star This Project
-
-If you find this project helpful, please give it a ⭐ on GitHub!
-
----
-
-**Version:** 1.0.0  
-**Last Updated:** October 5, 2025  
-**Author:** sgbilod  
-**Repository:** https://github.com/sgbilod/XMRig-Automation
+**Version:** 1.2.0 (Local Intelligence Layer + Ecosystem Federation)
+**Last Updated:** July 21, 2026
+**Repository:** https://github.com/iamthegreatdestroyer/XMRig-Automation
 
 **Happy Mining! 🚀⛏️**
