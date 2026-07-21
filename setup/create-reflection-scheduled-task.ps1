@@ -3,9 +3,12 @@
     Creates a Windows scheduled task for the nightly mining reflection job.
 
 .DESCRIPTION
-    Registers a daily task that runs `python -m intelligence.advisor --reflect`.
-    This is a heavy REFLECT-mode job (intelligence/advisor.py) that pauses
-    mining, summarizes the day's decision log via a local LLM, and resumes.
+    Registers a daily task that runs the reflection through the Ollama
+    pre-flight guard (setup\ensure-ollama-and-reflect.ps1), which ensures
+    `ollama serve` is listening before invoking `python -m intelligence.advisor
+    --reflect`. This is a heavy REFLECT-mode job (intelligence/advisor.py) that
+    pauses mining, summarizes the day's decision log via a local LLM, and
+    resumes.
 
     Thermal-safe by design: AdmissionController's thermal gate (see
     intelligence/admission.py) will defer the job rather than run it if the
@@ -89,12 +92,22 @@ try {
     Write-Host ""
 
     Write-Host "[3/5] Creating task action..." -ForegroundColor Cyan
-    $pythonExe = (Get-Command python).Source
+    # Run through the Ollama pre-flight guard rather than invoking python
+    # directly: it ensures `ollama serve` is actually listening before the
+    # reflection runs, so an auto-updated / rebooted / slept Ollama can no
+    # longer silently turn every nightly reflection into an empty stub
+    # (as happened for 12 straight nights, 2026-07-10..21).
+    $wrapper = Join-Path $RepoPath "setup\ensure-ollama-and-reflect.ps1"
+    if (-not (Test-Path $wrapper)) {
+        throw "Pre-flight guard not found: $wrapper"
+    }
+    $psExe = (Get-Command powershell.exe).Source
+    $wrapperArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`" -RepoPath `"$RepoPath`""
     $action = New-ScheduledTaskAction `
-        -Execute $pythonExe `
-        -Argument "-m intelligence.advisor --reflect" `
+        -Execute $psExe `
+        -Argument $wrapperArgs `
         -WorkingDirectory $RepoPath
-    Write-Host "  Action: $pythonExe -m intelligence.advisor --reflect" -ForegroundColor Green
+    Write-Host "  Action: powershell -File setup\ensure-ollama-and-reflect.ps1 (guarded reflection)" -ForegroundColor Green
     Write-Host ""
 
     Write-Host "[4/5] Creating task trigger..." -ForegroundColor Cyan
