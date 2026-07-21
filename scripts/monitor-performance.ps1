@@ -184,7 +184,11 @@ function Show-Dashboard {
         [hashtable]$ProcessInfo,
         [hashtable]$HashrateInfo,
         [hashtable]$ShareInfo,
-        [double]$Temperature,
+        # A [double] reading, OR the string "N/A" when no sensor is available.
+        # Must NOT be typed [double] -- binding "N/A" to [double] throws and
+        # crashed the monitor on the first refresh on any machine without a
+        # working temperature sensor.
+        $Temperature,
         [datetime]$Uptime
     )
     
@@ -247,7 +251,10 @@ function Show-Dashboard {
     Write-Host "│ SYSTEM METRICS                                              │" -ForegroundColor White
     Write-Host "└─────────────────────────────────────────────────────────────┘" -ForegroundColor White
     Write-Host "  CPU Temp:       " -NoNewline
-    if ($Temperature -ne "N/A") {
+    # Type-safe guard: a real reading is numeric; "N/A" is a string. Comparing
+    # a [double] against "N/A" with -ne/-eq throws (PowerShell coerces "N/A" to
+    # double), so check the type instead of the value.
+    if ($Temperature -is [double] -or $Temperature -is [int]) {
         if ($Temperature -ge $TEMP_ALERT_THRESHOLD) {
             Write-Host "$Temperature °C ⚠ HIGH!" -ForegroundColor Red
         }
@@ -298,7 +305,7 @@ function Show-Dashboard {
         Write-Host "  ⚠ Low hashrate detected ($([math]::Round($HashrateInfo.Hashrate60s, 2)) H/s < $HASHRATE_ALERT_THRESHOLD H/s)" -ForegroundColor Yellow
     }
     
-    if ($Temperature -ne "N/A" -and $Temperature -ge $TEMP_ALERT_THRESHOLD) {
+    if (($Temperature -is [double] -or $Temperature -is [int]) -and $Temperature -ge $TEMP_ALERT_THRESHOLD) {
         if (-not $hasAlerts) {
             Write-Host "┌─────────────────────────────────────────────────────────────┐" -ForegroundColor Red
             Write-Host "│ ⚠ ALERTS                                                    │" -ForegroundColor Red
