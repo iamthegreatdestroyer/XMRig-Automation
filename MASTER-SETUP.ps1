@@ -21,9 +21,31 @@
 
 [CmdletBinding()]
 param(
-    [string]$InstallPath = "C:\XMRig",
+    # Default resolved from config\paths.json (the canonical single source of
+    # truth) so the install target matches the versioned directory every
+    # runtime launcher uses. Pass -InstallPath to override explicitly.
+    [string]$InstallPath = "",
     [switch]$SkipRestart
 )
+
+# Resolve the canonical XMRig install path. Historically this defaulted to
+# "C:\XMRig" while every launcher used "C:\XMRig\xmrig-6.22.0", so a clean
+# install put xmrig.exe where nothing could launch it. config\paths.json is
+# now the single source of truth; honor an explicit -InstallPath if given.
+if ([string]::IsNullOrWhiteSpace($InstallPath)) {
+    $pathsFile = Join-Path $PSScriptRoot "config\paths.json"
+    if (Test-Path $pathsFile) {
+        try {
+            $InstallPath = (Get-Content $pathsFile -Raw | ConvertFrom-Json).xmrig_root
+        }
+        catch {
+            $InstallPath = "C:\XMRig\xmrig-6.22.0"
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($InstallPath)) {
+        $InstallPath = "C:\XMRig\xmrig-6.22.0"
+    }
+}
 
 # Setup logging
 $logFile = Join-Path $PSScriptRoot "setup-log.txt"

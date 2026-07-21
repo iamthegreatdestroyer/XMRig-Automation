@@ -1,0 +1,10 @@
+{
+  "_comment": "Canonical path definitions for XMRig-Automation. SINGLE SOURCE OF TRUTH for where XMRig lives on disk. The install target (setup/install.ps1 via MASTER-SETUP.ps1) MUST equal xmrig_root, or a clean install drops xmrig.exe one level above where every runtime launcher (scripts/start-mining.bat, production-start.ps1, RESTART-XMRIG.ps1, START-*.ps1, the Python intelligence layer, etc.) looks for it. Historically they disagreed: the installer used C:\\XMRig while the runtime used C:\\XMRig\\xmrig-6.22.0.",
+  "_note_version": "xmrig_root is version-pinned (xmrig-6.22.0) to match the existing convention baked into every launcher and config. install.ps1 downloads the LATEST XMRig into this folder, so the folder name is a stable directory label, not a guarantee of the exe version inside. Migrating every launcher to consume this file (and to a version-agnostic path) is a larger follow-up; this file first eliminates the install-vs-runtime schism.",
+  "xmrig_root": "C:\\XMRig\\xmrig-6.22.0",
+  "xmrig_exe": "C:\\XMRig\\xmrig-6.22.0\\xmrig.exe",
+  "xmrig_config": "C:\\XMRig\\xmrig-6.22.0\\config.json",
+  "xmrig_log": "C:\\XMRig\\xmrig-6.22.0\\xmrig.log",
+  "automation_root": "C:\\Users\\sgbil\\XMRig-Automation",
+  "ollama_model_path": "F:\\Dev\\ollama\\models"
+}
