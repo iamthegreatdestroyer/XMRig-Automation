@@ -23,7 +23,10 @@
 
 param(
     [int]$CheckIntervalMinutes = 30,
-    [string]$XMRigPath = "C:\XMRig",
+    # Versioned XMRig runtime dir -- the SAME directory the miner runs from and
+    # loads config.json from. Previously defaulted to C:\XMRig, one level above,
+    # so every thread change was written to a config the miner never loads.
+    [string]$XMRigPath = "C:\XMRig\xmrig-6.22.0",
     [int]$MaxTemp = 85,
     [int]$TargetTemp = 75,
     [double]$MinHashrate = 1500,
@@ -32,6 +35,14 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+
+# Real logical-processor count. config.cpu.'max-threads-hint' is a 0-100
+# PERCENTAGE of this, NOT an absolute thread count -- the previous code
+# conflated the two, so "increase from 50" became max-threads-hint=16 (16% ~=
+# 2-3 threads), tanking hashrate. All thread math below works in absolute
+# threads and converts to/from the percentage at the config boundary.
+$LogicalProcessors = [int]((Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum)
+if ($LogicalProcessors -lt 1) { $LogicalProcessors = 16 }
 $LogFile = "$XMRigPath\logs\optimizer.log"
 $PerformanceDB = "$XMRigPath\logs\performance-history.json"
 
@@ -98,13 +109,14 @@ function Get-CPUTemperature {
             return [int]$maxTemp
         }
         
-        # Fallback: Get-Counter for CPU load as proxy
-        $cpuLoad = (Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction SilentlyContinue).CounterSamples.CookedValue
-        
-        # Estimate temp based on load (very rough approximation)
-        # Base temp 50°C + (load/100 * 30°C)
-        $estimatedTemp = 50 + ($cpuLoad / 100 * 30)
-        return [int]$estimatedTemp
+        # No real thermal sensor available (OpenHardwareMonitor not installed;
+        # Windows has no per-die sensor via WMI on most consumer Ryzen laptops).
+        # Return -1 (UNKNOWN) rather than the old "50 + load*0.3" ESTIMATE: at
+        # full mining load that estimate read ~80C and triggered endless bogus
+        # REDUCE_THREADS on a fabricated number. Temperature-driven actions are
+        # all guarded by `CpuTemp -gt 0`, so -1 safely disables them until a
+        # real sensor (e.g. LibreHardwareMonitor) is wired in.
+        return -1
     }
     catch {
         Write-Log "Unable to read temperature: $($_.Exception.Message)" "DEBUG"
@@ -162,13 +174,19 @@ function Get-MiningMetrics {
         # Get CPU temperature
         $cpuTemp = Get-CPUTemperature
         
-        # Get current thread count from config
+        # Current thread count. config.cpu.'max-threads-hint' is a 0-100
+        # PERCENTAGE of logical processors; convert to ABSOLUTE threads here so
+        # the tuning math (which works in absolute threads) is correct.
+        # Adjust-Threads converts back to a percentage on write.
         $configPath = "$XMRigPath\config.json"
-        $threads = 12  # default
+        $threads = [int][Math]::Round(0.5 * $LogicalProcessors)  # default 50%
         if (Test-Path $configPath) {
             try {
                 $config = Get-Content $configPath | ConvertFrom-Json
-                $threads = $config.cpu.'max-threads-hint'
+                $hintPct = [double]$config.cpu.'max-threads-hint'
+                if ($hintPct -gt 0) {
+                    $threads = [int][Math]::Round($hintPct / 100 * $LogicalProcessors)
+                }
             }
             catch {
                 Write-Log "Failed to parse config for thread count" "DEBUG"
@@ -394,17 +412,33 @@ function Adjust-Threads {
     
     try {
         $config = Get-Content $configPath | ConvertFrom-Json
-        $currentThreads = $config.cpu.'max-threads-hint'
-        
-        if ($NewThreadCount -eq $currentThreads) {
-            Write-Log "  ℹ️ Already at $NewThreadCount threads" "INFO"
+
+        # If cpu.rx is an explicit core list, the intelligence layer
+        # (admission.py / ucb1_bandit.py) owns thread control and XMRig obeys
+        # cpu.rx over max-threads-hint. Writing max-threads-hint here would be
+        # silently ignored, and the restart would only disrupt live mining --
+        # so stand down rather than fight the newer controller.
+        if ($config.cpu.rx -is [System.Array] -and $config.cpu.rx.Count -gt 0) {
+            Write-Log "  ⏸ cpu.rx explicit core list present -- the intelligence layer owns thread control; skipping optimizer adjustment (XMRig would ignore max-threads-hint anyway)." "WARNING"
             return
         }
-        
-        Write-Log "  🔧 Adjusting threads: $currentThreads → $NewThreadCount" "INFO"
+
+        # max-threads-hint is a PERCENTAGE; convert the requested absolute
+        # thread count back to a 1-100 percentage before writing.
+        $currentPct = [double]$config.cpu.'max-threads-hint'
+        $currentThreads = [int][Math]::Round($currentPct / 100 * $LogicalProcessors)
+        $newPct = [int][Math]::Round(($NewThreadCount / $LogicalProcessors) * 100)
+        $newPct = [Math]::Max(1, [Math]::Min(100, $newPct))
+
+        if ($newPct -eq $currentPct) {
+            Write-Log "  ℹ️ Already at $NewThreadCount threads (${newPct}%)" "INFO"
+            return
+        }
+
+        Write-Log "  🔧 Adjusting threads: ~$currentThreads → $NewThreadCount (max-threads-hint ${currentPct}% → ${newPct}%)" "INFO"
         Write-Log "     Reason: $Reason" "INFO"
-        
-        $config.cpu.'max-threads-hint' = $NewThreadCount
+
+        $config.cpu.'max-threads-hint' = $newPct
         $config | ConvertTo-Json -Depth 10 | Set-Content $configPath
         
         # Restart miner
