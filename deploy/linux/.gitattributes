@@ -1,0 +1,4 @@
+# Everything in this kit is consumed on Linux (bash scripts, systemd unit, sysctl, JSON config).
+# Force LF in BOTH the repo blob and the working copy regardless of core.autocrlf, so that an
+# `scp` of the working copy to a box never delivers CRLF (which would break bash + systemd parsing).
+* text eol=lf

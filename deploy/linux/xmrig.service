@@ -1,0 +1,56 @@
+[Unit]
+Description=XMRig RandomX miner (Monero) - unprivileged
+Documentation=https://xmrig.com/docs
+After=network-online.target time-sync.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=xmrig
+Group=xmrig
+ExecStart=/opt/xmrig/xmrig --config=/etc/xmrig/config.json
+Restart=on-failure
+RestartSec=15
+
+# --- privilege / isolation (runs with NO capabilities, NO root) ---
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectProc=invisible
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# DO NOT ADD any of the following - each SILENTLY cripples RandomX hashrate:
+#   MemoryDenyWriteExecute=true   -> forbids the RandomX JIT (falls back to the slow interpreter)
+#   SystemCallFilter=~@resources  -> blocks mlock (hugepage locking) and sched_setaffinity (pinning)
+#   ProcSubset=pid                -> hides /proc/cpuinfo,/proc/meminfo (breaks CPU/hugepage detection)
+
+# --- hugepages / limits / logging ---
+LimitMEMLOCK=infinity
+LimitNOFILE=8192
+LogsDirectory=xmrig
+LogsDirectoryMode=0750
+
+# --- contention: mine only with idle cycles, yield instantly to real work ---
+Nice=19
+CPUWeight=1
+IOWeight=1
+
+[Install]
+WantedBy=multi-user.target

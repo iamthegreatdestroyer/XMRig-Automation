@@ -13,6 +13,14 @@ config/config.json
 *.dll
 *.sys
 
+# Linux deploy kit (deploy/linux/): keep the real wallet env, any rendered/real config, and
+# the downloaded miner tarball OUT of git. Tracked reference = deploy.env.example + the template.
+deploy/linux/deploy.env
+deploy/linux/**/*.rendered.json
+deploy/linux/**/config.local.json
+deploy/linux/xmrig-*-linux-static-x64.tar.gz
+deploy/linux/xmrig-*/
+
 # Log files
 *.log
 logs/
