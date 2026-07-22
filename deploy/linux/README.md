@@ -91,6 +91,22 @@ studio and forge are independent — a problem on one never touches the other.
 | `xmrig-6.22.0-linux-static-x64.sha256` | pinned official checksum |
 | `deploy.env.example` | template for the (gitignored) `deploy.env` holding the public wallet |
 
+## Busy-watchdog (build nodes — recommended for forge)
+`Nice`/`CPUWeight`/`CPUQuota` only make the miner yield *partially*: interactive builds run in
+`user.slice` while the miner is in `system.slice`, so the two peer slices split the CPU ~50/50 and a
+build is slowed ~30% rather than fully protected (measured live). For **true builds-always-win**,
+install the watchdog — it samples CPU idle every 30s and **pauses the miner** when the box is busy,
+**resuming** it when idle. It only ever resumes a miner it paused (never fights a manual stop).
+
+```bash
+# on the box, as root, after install-xmrig.sh:
+cd /tmp/xmrig-deploy
+sudo ./install-watchdog.sh
+journalctl -t xmrig-watchdog -f     # watch PAUSE/RESUME decisions
+```
+Thresholds live in `/etc/default/xmrig-watchdog` (`PAUSE_BELOW_IDLE=35`, `RESUME_ABOVE_IDLE=80` —
+percent CPU idle). `uninstall-xmrig.sh` removes the watchdog too.
+
 ## Optional follow-on
 Central monitoring: bind the API additionally on the wg0 IP + add a Prometheus target, or point the
 repo's `dashboard/prometheus_metrics_server.py` at each box's `127.0.0.1:18088`. Not part of the base deploy.

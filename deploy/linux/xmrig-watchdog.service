@@ -1,0 +1,9 @@
+[Unit]
+Description=XMRig busy-watchdog (pause miner during builds, resume when idle)
+ConditionPathExists=/opt/xmrig/xmrig-watchdog.sh
+
+[Service]
+Type=oneshot
+# Runs as root: it must systemctl start/stop xmrig.service. The script is tiny and auditable;
+# it takes a 2s CPU-idle sample and does nothing else. It never touches the miner's own privileges.
+ExecStart=/opt/xmrig/xmrig-watchdog.sh

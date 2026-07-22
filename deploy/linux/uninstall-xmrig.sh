@@ -3,6 +3,11 @@
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "run as root"; exit 1; }
 
+# watchdog (if installed)
+systemctl disable --now xmrig-watchdog.timer 2>/dev/null || true
+rm -f /etc/systemd/system/xmrig-watchdog.service /etc/systemd/system/xmrig-watchdog.timer
+rm -f /opt/xmrig/xmrig-watchdog.sh /etc/default/xmrig-watchdog /run/xmrig-watchdog.paused
+
 systemctl disable --now xmrig 2>/dev/null || true
 rm -f  /etc/systemd/system/xmrig.service
 rm -rf /etc/systemd/system/xmrig.service.d
